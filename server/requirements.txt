@@ -1,0 +1,57 @@
+# FastAPI and server dependencies
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+aiofiles==24.1.0
+slowapi==0.1.9  # Rate limiting
+
+# HTTP client
+httpx==0.28.1
+
+# Document processing
+docling>=2.9.0
+surya-ocr>=0.11.0  # High-precision vision OCR (layout, tables, math)
+filetype>=1.2.0  # Required by surya for file type detection
+sentence-transformers>=2.2.0  # NEW: For reranking with cross-encoder
+ragas>=0.1.0  # NEW: For RAG evaluation
+
+# File conversion (optional)
+reportlab==4.2.5
+python-docx==1.1.2
+
+# Environment
+python-dotenv==1.0.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+pgvector==0.3.6
+alembic==1.14.0
+
+# Redis and Celery
+redis==5.2.1
+celery[redis]==5.4.0
+
+# Caching
+gptcache>=0.1.43  # Semantic caching for RAG responses
+
+# MinIO/S3
+minio==7.2.12
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+email-validator==2.1.0
+
+# Vector Search (for Memori)
+faiss-cpu==1.9.0.post1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+hypothesis==6.122.3
+lightrag-hku>=1.4.11  # Added for graph RAG (LightRAG)

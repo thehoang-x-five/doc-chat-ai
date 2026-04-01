@@ -1,0 +1,438 @@
+@startuml chat_workflow
+!theme plain
+title Chat Flow — ChatPipeline SSE Pipeline (v2 — 2026-02-24)
+skinparam backgroundColor #FFFFFF
+skinparam activityBackgroundColor #E3F2FD
+skinparam activityBorderColor #1565C0
+
+|#LightBlue|Frontend (Chat.tsx)|
+start
+:User sends message;
+note right
+  **POST /api/v1/chat/stream**
+  question, workspace_id,
+  conversation_id, model?,
+  tags?, document_ids?
+end note
+
+|#LightGreen|API Layer (chat.py)|
+
+partition "Rate Limit + Auth" #E8F5E9 {
+  :RateLimiter.check(user_id, workspace_id, IP);
+  :Max concurrent streams check;
+  if (EXCEEDED?) then (yes)
+    :429 Too Many Requests;
+    stop
+  endif
+  :JWT Auth → user_id;
+}
+
+:stream_query endpoint;
+note right
+  StreamingResponse SSE
+  media_type: text/event-stream
+end note
+:ChatPipeline(db).stream_response(...);
+
+|#LightYellow|ChatPipeline.stream_response|
+
+:Emit PROGRESS "Đang khởi tạo..." (5%);
+
+if (conversation_id?) then (yes)
+  :_stream_with_context();
+else (no — stateless)
+  :_stream_stateless();
+  note right
+    Stateless vẫn có:
+    - Input guardrails
+    - Retrieval + citations
+    - Light post validation
+    Chỉ bỏ: DB save
+  end note
+  :Emit DONE;
+  stop
+endif
+
+|#LightPink|_stream_with_context|
+
+partition "① Dedup Cache (Redis)" #FFF3E0 {
+  :ConversationService.get_conversation();
+  :user_id = conversation.created_by;
+  :DedupCache.get(user_id, workspace_id, query);
+
+  if (Cache HIT?) then (yes)
+    :Stream cached answer → Emit TOKEN;
+    :Emit METADATA (model: "cached");
+    #LimeGreen:return;
+    detach
+  else (no)
+    :check_and_set_processing;
+  endif
+}
+
+partition "② Input Guardrails" #FFEBEE {
+  :GuardrailsService.check_input(query, user_id, workspace_id);
+  note right
+    **5 Rails:**
+    Jailbreak, Topic restriction,
+    Prompt injection, SQL injection,
+    Content policy
+  end note
+
+  if (BLOCKED?) then (yes)
+    :Save user message → DB;
+    :Emit TOKEN: safe rejection;
+    :Save assistant (model: guardrails);
+    :Emit METADATA (input_blocked: true);
+    #Tomato:return;
+    detach
+  else (PASS)
+    :Save guardrails instance;
+  endif
+}
+
+partition "②b PII Redaction" #FFE0E0 {
+  :SafetyChecker.check_pii(query, redact=True);
+  if (Has PII?) then (yes)
+    :query = redacted_text;
+  endif
+}
+
+partition "③ Intent Detection" #F3E5F5 {
+  :IntentDetector.detect_with_caching(query);
+
+  switch (Intent?)
+  case (GREETING / CHITCHAT)
+    :Save user msg → direct response;
+    :Emit TOKEN + METADATA;
+    #LimeGreen:return;
+    detach
+  case (IMAGE_GENERATION)
+    :Flag for ④c;
+  case (DOCUMENT_QUERY / OTHER)
+    :Continue;
+  endswitch
+}
+
+partition "④ Tool Calling (LLM-routed)" #FFE0B2 {
+  :FunctionCallingService.should_use_function_calling(LLM-based);
+  note right
+    Router: LLM decides tool + args
+    (not keyword match)
+    Tool permission: workspace policy
+  end note
+
+  if (Tool decided?) then (yes)
+    :Check tool permission (workspace ACL);
+    if (Permitted?) then (yes)
+      :execute_tool(tool, args) [5s timeout];
+      :Emit TOKEN + METADATA;
+      #LimeGreen:return;
+      detach
+    else (no permission)
+      :Fall through;
+    endif
+  endif
+}
+
+partition "④b Function Registry" #FFCC80 {
+  :Initialize quality_scores = {};
+  :register_builtin_functions (5 tools);
+  note right
+    calculate, get_current_time,
+    format_text, search, get_doc
+  end note
+
+  if (Registry tool matched?) then (yes)
+    :registry.execute(tool, args);
+    :Record in quality_scores["function_registry"];
+  endif
+}
+
+partition "④c Image Generation" #E1BEE7 {
+  if (intent == IMAGE_GENERATION?) then (yes)
+    :Save user msg;
+    :image_service.generate(prompt);
+    if (Success?) then (yes)
+      :Emit TOKEN + METADATA (images);
+      #LimeGreen:return;
+      detach
+    else (fail)
+      :Fall through to RAG;
+    endif
+  endif
+}
+
+|#LightCyan|Full RAG Path|
+
+partition "Setup" #E3F2FD {
+  :RAGService.get_instance(session);
+  :Save user message → DB;
+  :ConversationService.get_messages(limit=10);
+}
+
+partition "⑤ Memory Recall" #E0F7FA {
+  :Emit PROGRESS: "Phân tích ngữ cảnh..." (10%);
+
+  :MemoryCacheManager.get_memory / get_memori;
+  if (Cache HIT?) then (yes)
+    :Use cached memory + memori;
+  else (no)
+    :ParallelMemoryExecutor + RetryHandler;
+    fork
+      :MemoryManager (short-term);
+    fork again
+      :MemoriManager (long-term facts);
+    fork again
+      :GraphSearchService (knowledge graph);
+    end fork
+    :Cache results in Redis;
+  endif
+}
+
+partition "⑤b Context Budget" #B2EBF2 {
+  :ContextBudgetManager(max_tokens=8000);
+  :Trim memory + history to fit window;
+}
+
+partition "⑤c Latency Budget" #80DEEA {
+  :LatencyBudgetManager.allocate_budget;
+  note right
+    4 nodes: guardrails 10%,
+    intent 10%, rag 60%, quality 20%
+  end note
+}
+
+partition "⑤d Multi-RAG Orchestration" #B2DFDB {
+  :QueryAnalyzer.analyze_with_routing(query);
+
+  if (Complexity >= MODERATE?) then (yes)
+    :SmartRouter.route(analysis);
+    if (confidence >= 0.6?) then (yes)
+      :PatternOrchestrator.orchestrate();
+      note right
+        9 patterns: Corrective, Self-RAG,
+        Adaptive, CORAG, Speculative...
+      end note
+    endif
+  endif
+}
+
+partition "⑥0 Query Rewrite (optional)" #FFFDE7 {
+  :Emit PROGRESS: "Tìm kiếm tài liệu..." (20%);
+  :Reformulate query for better retrieval;
+  note right
+    HyDE / Step-back / Sub-queries
+  end note
+}
+
+partition "⑥1 Retrieve — Hybrid Search" #FFF9C4 {
+  :HybridSearch(BM25 + vector, top-N=20);
+  note right
+    VectorStore.search (HNSW/FAISS)
+    + BM25 keyword index
+    Fused by RRF / score normalization
+  end note
+
+  :ACL **prefilter** (query-time — NOT post-hoc);
+  note right
+    workspace_id scoped in query()
+    + document_ids whitelist
+    → prevents cross-doc leakage
+  end note
+  :Chunk dedup + section merge;
+}
+
+partition "⑥1b Fallback Ladder" #FFF59D {
+  if (No results OR top_score < min_score?) then (yes)
+    note right
+      **Two triggers:**
+      (a) empty: no chunks at all
+      (b) low_score: top < 0.3
+    end note
+    :Step 1: Retry original query;
+    if (Still empty/low?) then (yes)
+      :Step 2: Step-back rewrite
+        (remove constraints, expand synonyms);
+      if (Still empty/low?) then (yes)
+        :Step 3: Flag exhausted, refuse;
+        note right
+          **Prevents hallucination:**
+          refuses to answer rather than
+          fabricate from empty context
+        end note
+      endif
+    endif
+  endif
+}
+
+partition "⑥2 Rerank top-N → top-K" #FFF176 {
+  :RerankerService.rerank(query, candidates, top_k=5);
+  note right
+    Cross-encoder scoring
+    Before context packing
+    Before generation
+  end note
+}
+
+partition "⑥3 Context Pack + Citation Map" #FFEE58 {
+  :⑥a PromptBuilder(language="vi");
+  :Build system + user prompt with:
+    memory_context, conversation_history,
+    top-K chunks as context;
+  :Citation builder (chunk_id, doc_id, page/offset);
+  :citations list ready;
+  note right
+    **paragraph_citations** computed by
+    span-match (4+ word phrase overlap)
+    between paragraphs and chunks.
+    Alt: LLM-based attribution.
+  end note
+}
+
+partition "⑥4 Generate Stream + Light QA" #FFD54F {
+  :Start _mid_stream_quality_monitor (async);
+  note right
+    **Light checks only:**
+    - Toxicity / PII leak scan
+    - Regex secrets detection
+    - Length / format control
+    **NOT:** grounding/hallucination
+    (needs full response)
+  end note
+
+  :AIProviderManager.stream(prompt, model);
+
+  while (Streaming?) is (chunk)
+    :Emit TOKEN;
+    :answer_accumulator += chunk;
+    if (Light check triggered?) then (yes)
+      :Emit WARNING if toxic / leak;
+    endif
+  endwhile (done)
+
+  :Stop light QA monitor;
+  :quality_scores["orchestration"] recorded;
+}
+
+|#Wheat|Post-Stream Quality|
+
+partition "⑦ Hallucination + Grounding + Fact" #FCE4EC {
+  if (answer + context exist?) then (yes)
+    fork
+      :HallucinationChecker.check_faithfulness;
+    fork again
+      :GroundingVerifier.verify;
+    fork again
+      :⑦b FactChecker.verify_numerical_claims;
+    end fork
+  endif
+}
+
+partition "⑦c Confidence + ⑦d Policy + ⑦e Validation" #F8BBD0 {
+  :confidence_scorer.compute_confidence(
+    hallucination, grounding, safety, fact_check, latency);
+  :PolicyService.evaluate_with_dynamic_thresholds;
+  :result_validator.validate(query, response, sources);
+
+  if (faithfulness < threshold?) then (yes)
+    :Add disclaimer ⚠️ or 💡;
+  endif
+}
+
+partition "⑦f Corrective Loop (Self-RAG)" #E91E63 {
+  if (faithfulness < 0.5 AND retry_count < 2?) then (yes)
+    note right
+      **Corrective path:**
+      re-retrieve broadened query
+      rerun ⑥1→⑥4 (non-stream)
+      emit **REPLACE_RESPONSE** event
+      + TOKEN safety net (REVISION_APPEND)
+      Client: replace_supported?
+       else fallback to appended note
+    end note
+    :broadened_query = expand(query);
+    :corrective_retrieve(broadened_query);
+    :rerun generation (non-stream, timeout 10s);
+    :Emit REPLACE_RESPONSE {content, reason,
+      faithfulness, fallback_mode};
+    :Emit TOKEN revision note (safety net);
+    :retry_count++;
+  elseif (coverage too low?) then (yes)
+    :Emit TOKEN: "Xin lỗi, tôi không tìm thấy đủ thông tin...";
+  endif
+}
+
+|#LightGreen|Finalization|
+
+partition "Emit METADATA" #E8F5E9 {
+  :metadata = {model, provider, citations,
+               quality, confidence_label, warnings,
+               **trace_id**, paragraph_citations};
+  note right
+    **trace_id**: uuid4[:12]
+    for end-to-end debugging
+    **paragraph_citations**:
+    inline mapping {p_idx: [c_idx...]}
+    per paragraph → per citation
+  end note
+  :Emit METADATA event;
+}
+
+partition "Save + Auto-title" #ECEFF1 {
+  :Save assistant message + citations;
+  :conv_service.auto_title_conversation();
+}
+
+partition "⑧ Background Post-Processing" #E0E0E0 {
+  fork
+    :⑧a AutoCognifyService.cognify_message;
+  fork again
+    :⑧b MemifyService.memify (graph enrichment);
+  fork again
+    :⑧c AugmentationPipeline.process_all
+    (Fact + Preference + Attribute);
+  fork again
+    :DedupCache.set (cache response);
+  end fork
+}
+
+partition "⑨ Monitoring" #CFD8DC {
+  :PatternMonitor.record_query(latency, accuracy);
+  :LatencyBudgetManager.check_budget;
+}
+
+:Emit DONE (total_time_ms);
+stop
+
+legend right
+  **ChatPipeline v2 — Fixed Architecture (2026-02-24)**
+  |= # |= Stage |= Key Fix |
+  | 0 | Rate Limit | Per user/workspace/IP |
+  | ① | Dedup | (user, workspace, query) |
+  | ② | Guardrails | Before intent/tools |
+  | ②b | PII | Redact before RAG |
+  | ③ | Intent | Bypass RAG |
+  | ④ | Tools | **LLM-routed + ACL** |
+  | ④b | Registry | 5 built-ins |
+  | ④c | Image Gen | Optional exit |
+  | ⑤ | Memory | Parallel + Retry |
+  | ⑤b | Context Budget | Token trim |
+  | ⑤c | Latency Budget | SLA alloc |
+  | ⑤d | Multi-RAG | Pattern orchestration |
+  | ⑥0 | Query Rewrite | HyDE/Step-back |
+  | **⑥1** | **Retrieve** | **HybridSearch + ACL prefilter** |
+  | **⑥1b** | **Fallback Ladder** | **3-step: retry/broaden/refuse** |
+  | **⑥2** | **Rerank** | **BEFORE generate** |
+  | ⑥3 | Context Pack | Citation map |
+  | ⑥4 | Generate Stream | Light QA only |
+  | ⑦ | Post Quality | Hallucination+Grounding |
+  | **⑦f** | **Corrective Loop** | **REPLACE_RESPONSE event** |
+  | ⑧ | Background | Cognify/Memify/Augment |
+  | ⑨ | Monitoring | Latency + Pattern |
+  | ✚ | trace_id | uuid4[:12] in SSE events |
+  | ✚ | Citation mapping | per-paragraph inline |
+  | ✚ | Tool grounding | source: tool vs doc |
+endlegend
+
+@enduml

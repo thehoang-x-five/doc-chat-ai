@@ -1,0 +1,312 @@
+Sổ Tay 25 Mẫu Thiết Kế RAG: Từ Nền Tảng đến Nâng Cao
+Giới thiệu: Tại sao Cần Nhiều Hơn Một Kiến Trúc RAG?
+Bởi vì một kiến trúc RAG không bao giờ là đủ. Lĩnh vực Truy xuất Tăng cường Tạo sinh (Retrieval-Augmented Generation - RAG) đang phát triển với tốc độ chóng mặt, vượt ra ngoài các mô hình ban đầu. Các kiến trúc đã tiến hóa từ Tiêu chuẩn (Standard) đến Nâng cao (Advanced) và Chuyên biệt (Specialized), mỗi loại được thiết kế để giải quyết những thách thức riêng biệt. Đối với bất kỳ ai đang xây dựng các sản phẩm AI vào năm 2025, việc hiểu rõ các mẫu thiết kế này là vô cùng cần thiết để tạo ra các ứng dụng thông minh, hiệu quả và đáng tin cậy.
+Sổ tay này sẽ giới thiệu chi tiết 25 mẫu thiết kế RAG, được phân loại thành 5 nhóm chính, giúp bạn xây dựng nền tảng vững chắc và tiến tới các kỹ thuật tinh vi hơn:
+•	Nền tảng (Foundation)
+•	Nâng cao (Advanced)
+•	Chuyên biệt (Specialized)
+•	Tối ưu hóa (Optimized)
+•	Theo Lĩnh vực cụ thể (Domain-Specific)
+Phần I: Các Mẫu Nền Tảng (Foundation Patterns)
+Đây là những khối xây dựng cơ bản, tạo nên nền móng cho hầu hết các hệ thống RAG hiện đại. Việc nắm vững chúng là bước đầu tiên để xây dựng bất kỳ ứng dụng RAG nào.
+1. Standard RAG (RAG Tiêu chuẩn)
+Định nghĩa: Kết hợp truy xuất với các mô hình ngôn ngữ lớn để có các phản hồi chính xác, nhận biết ngữ cảnh.
+•	Mục đích chính: Đây là mẫu cơ bản nhất, giải quyết vấn đề kiến thức bị giới hạn của Mô hình Ngôn ngữ Lớn (LLM) bằng cách cho phép nó truy cập và tận dụng các nguồn dữ liệu bên ngoài để nâng cao chất lượng câu trả lời.
+•	Các tính năng chính và lợi ích:
+o	Chia nhỏ tài liệu: Phân tách tài liệu thành các đoạn (chunks) nhỏ hơn. Lợi ích là giúp hệ thống truy xuất thông tin cụ thể và liên quan một cách hiệu quả, thay vì phải xử lý toàn bộ tài liệu lớn.
+o	Thời gian phản hồi 1-2 giây: Được thiết kế để phản hồi nhanh. Lợi ích là phù hợp cho các ứng dụng cần tương tác thời gian thực, mang lại trải nghiệm người dùng mượt mà.
+o	Nâng cao chất lượng câu trả lời: Tận dụng các nguồn dữ liệu bên ngoài. Lợi ích là tạo ra các câu trả lời đáng tin cậy và có cơ sở hơn, giảm thiểu hiện tượng "ảo giác" (hallucination) so với việc chỉ dùng LLM.
+•	Mô tả Sơ đồ kiến trúc: Kiến trúc này hoạt động theo hai quy trình chính. Quy trình Offline là giai đoạn chuẩn bị, nơi các tài liệu (Documents) được xử lý thông qua một bước lập chỉ mục (Indexing) để tạo ra một Cơ sở tri thức (Knowledge Base) có thể tìm kiếm được. Quy trình Online bắt đầu khi người dùng gửi một truy vấn (User Query). Bộ truy xuất (Retriever) sẽ tìm kiếm trong Cơ sở tri thức để lấy ra các tài liệu liên quan (Relevant Documents). Cuối cùng, cả truy vấn của người dùng và các tài liệu này được đưa vào bộ tạo sinh (Generator - LLM) để tạo ra một phản hồi cuối cùng (Generated Response) chính xác và đầy đủ ngữ cảnh.
+2. Corrective RAG (RAG Chỉnh sửa)
+Mặc dù Standard RAG rất mạnh mẽ, nó lại giả định rằng các tài liệu được truy xuất luôn chính xác. Nhưng nếu chúng không chính xác thì sao? Mẫu Corrective RAG giải quyết vấn đề quan trọng này.
+Định nghĩa: RAG với việc xác thực và chỉnh sửa. Nội dung được truy xuất sẽ được chấm điểm, so sánh với các quy tắc hoặc bộ dữ liệu đáng tin cậy.
+•	Mục đích chính: Tăng cường độ chính xác bằng cách tự động đánh giá và sửa các thông tin không chính xác được truy xuất trước khi tạo câu trả lời. Điều này đảm bảo kết quả đầu ra đáng tin cậy hơn, đặc biệt trong các lĩnh vực yêu cầu độ chính xác cao.
+•	Phù hợp nhất cho:
+o	Hệ thống tuân thủ (Compliance systems)
+o	Hệ thống Hỏi-Đáp doanh nghiệp (Enterprise QA)
+o	Các ứng dụng đòi hỏi độ chính xác cao
+•	Mô tả Sơ đồ kiến trúc: Luồng xử lý bắt đầu bằng việc chuẩn bị dữ liệu: một nguồn tri thức (Knowledge source) được tiền xử lý (Preprocessing) để tạo ra một Vector Store hoặc Knowledge Graph. Khi người dùng gửi một truy vấn (Query), LLM sẽ tìm kiếm và truy xuất thông tin từ kho tri thức này. Điểm khác biệt cốt lõi nằm ở bước tiếp theo: LLM sẽ chấm điểm (Grade) mức độ liên quan của thông tin truy xuất. Nếu thông tin được đánh giá là liên quan (Is Relevant? -> Yes), hệ thống sẽ tạo ra phản hồi (Response). Ngược lại, nếu không liên quan (No), hệ thống sẽ tự động thực hiện một tìm kiếm trên web (Web Search) để tìm thông tin chính xác hơn trước khi tạo phản hồi.
+3. Self RAG (RAG Tự thân)
+Đôi khi, câu trả lời cần được tinh chỉnh nhiều lần để đạt được chất lượng tốt nhất. Mẫu Self RAG giải quyết vấn đề này bằng cách tạo ra một vòng lặp tự cải thiện.
+Định nghĩa: Sử dụng chính các kết quả đầu ra của mô hình làm ứng viên truy xuất để có sự liên quan theo ngữ cảnh tốt hơn.
+•	Mục đích chính: Cải thiện tính nhất quán và độ chính xác bằng cách tạo ra một vòng lặp phản hồi, nơi mô hình tự tinh chỉnh, kiểm tra và xác thực các câu trả lời của chính nó. Hãy tưởng tượng đây là một quá trình tự kiểm điểm để đảm bảo chất lượng.
+•	Các tính năng chính và lợi ích:
+o	Tinh chỉnh lặp đi lặp lại: Cải thiện câu trả lời qua nhiều vòng lặp, giúp tăng tính nhất quán và mạch lạc.
+o	Dựa trên kết quả trước đó: Sử dụng các kết quả đã tạo để làm nền tảng, giúp tăng độ chính xác của các câu trả lời tiếp theo.
+o	Thích ứng chiến lược truy xuất: Tự động điều chỉnh cách truy xuất dựa trên bối cảnh đang phát triển của cuộc hội thoại.
+•	Mô tả Sơ đồ kiến trúc: Khi nhận truy vấn của người dùng (User Query), bộ truy xuất (Retriever) sẽ tìm kiếm tài liệu. Hệ thống tự đặt câu hỏi đầu tiên: "Có liên quan đến tài liệu không?" (Is relevant to Doc?). Nếu không, nó sẽ không trả về kết quả. Nếu có, nó sẽ tạo ra một kết quả nháp (Generated Results) và tiếp tục kiểm tra: "Có bịa đặt không?" (Has Hallucinations?). Nếu câu trả lời không bịa đặt, nó sẽ đến bước kiểm tra cuối cùng: "Câu trả lời đã hoàn chỉnh và chính xác chưa?" (Is the Answer?). Nếu câu trả lời đã đạt yêu cầu, kết quả (Result) sẽ được trả về. Nếu ở bất kỳ bước nào, câu trả lời chưa đủ tốt, nó sẽ được viết lại (Re-write) và quay trở lại bộ truy xuất để bắt đầu lại vòng lặp tinh chỉnh.
+Sau khi nắm vững các mẫu nền tảng, chúng ta sẽ khám phá các kiến trúc Nâng cao, được thiết kế để giải quyết các vấn đề phức tạp hơn bằng cách sử dụng nhiều nguồn dữ liệu và các tác tử thông minh.
+Phần II: Các Mẫu Nâng Cao (Advanced Patterns)
+Các mẫu này xây dựng dựa trên nền tảng để tăng cường hiệu suất, khả năng phục hồi và tính linh hoạt cho các hệ thống RAG, giúp chúng giải quyết các bài toán khó hơn trong thế giới thực.
+4. Speculative RAG (RAG Suy đoán)
+Standard RAG có thể tốn kém và chậm nếu phải dựa vào một mô hình ngôn ngữ lớn duy nhất. Speculative RAG đưa ra một giải pháp thông minh để tối ưu hóa chi phí và tốc độ.
+Định nghĩa: Sử dụng một mô hình chuyên biệt nhỏ để soạn thảo và một mô hình tổng quát lớn hơn để xác minh, đảm bảo hiệu quả và độ chính xác.
+•	Mục đích chính: Tăng tốc độ phản hồi và giảm chi phí tính toán. Cốt lõi của mẫu này là một chiến lược kinh tế thông minh: sử dụng một mô hình nhỏ, rẻ tiền để tạo ra nhiều bản nháp và chỉ sử dụng mô hình lớn, đắt tiền để xác minh bản nháp tốt nhất.
+•	Các tính năng chính và lợi ích:
+o	Soạn thảo song song: Tạo ra nhiều bản nháp cùng lúc từ nhiều truy vấn, giúp tăng tốc độ phản hồi đáng kể.
+o	Độ chính xác vượt trội: Thường mang lại kết quả tốt hơn so với hệ thống RAG tiêu chuẩn nhờ việc khám phá nhiều hướng câu trả lời.
+o	Xử lý hiệu quả: Giảm tải tính toán bằng cách giao các nhiệm vụ phức tạp cho các mô hình chuyên biệt, giúp tiết kiệm tài nguyên.
+•	Mô tả Sơ đồ kiến trúc: Từ truy vấn của người dùng (User Query), hệ thống không chỉ tìm kiếm dựa trên truy vấn gốc mà còn tạo ra nhiều truy vấn tìm kiếm vector tương tự (Generate Similar Queries). Tất cả các truy vấn này được thực hiện song song. Các kết quả từ các tìm kiếm đa dạng này sau đó được hợp nhất một cách thông minh bằng kỹ thuật Reciprocal Rank Fusion. Sau khi có được kết quả đã xếp hạng lại (Re-ranked Results), hệ thống sẽ tạo ra kết quả đầu ra (Generative Output) cuối cùng.
+5. Fusion RAG (RAG Hợp nhất)
+Việc chỉ dựa vào một nguồn dữ liệu duy nhất có thể dẫn đến các câu trả lời thiếu sót. Fusion RAG giải quyết vấn đề này bằng cách tổng hợp thông tin từ nhiều nguồn khác nhau.
+Định nghĩa: Tích hợp nhiều phương pháp truy xuất và nguồn dữ liệu để nâng cao chất lượng phản hồi.
+•	Mục đích chính: Tạo ra các câu trả lời toàn diện hơn và tăng khả năng phục hồi của hệ thống. Bằng cách không phụ thuộc vào một nguồn dữ liệu hoặc một phương pháp truy xuất duy nhất, hệ thống trở nên mạnh mẽ và linh hoạt hơn.
+•	Các tính năng chính và lợi ích:
+o	Câu trả lời toàn diện: Tận dụng các nguồn đầu vào đa dạng (ví dụ: tìm kiếm vector, tìm kiếm từ khóa, đồ thị tri thức) để có một bức tranh đầy đủ hơn.
+o	Tăng khả năng phục hồi: Giảm sự phụ thuộc vào một nguồn duy nhất, giúp hệ thống hoạt động ổn định ngay cả khi một nguồn gặp sự cố.
+o	Chiến lược linh hoạt: Điều chỉnh chiến lược truy xuất một cách linh hoạt dựa trên ngữ cảnh của truy vấn để chọn ra phương pháp hiệu quả nhất.
+6. Agentic RAG (RAG Tác tử)
+Các truy vấn của người dùng ngày càng phức tạp, đòi hỏi không chỉ truy xuất mà còn phải thực hiện nhiều hành động. Agentic RAG biến hệ thống RAG thành một tác nhân thông minh có khả năng hành động.
+Định nghĩa: Sử dụng các tác tử thích ứng để điều chỉnh chiến lược thời gian thực trong việc truy xuất thông tin.
+•	Mục đích chính: Cho phép hệ thống thực hiện các tác vụ phức tạp bằng cách sử dụng các tác tử (agents) thông minh. Các tác tử này có thể diễn giải ý định của người dùng, lập kế hoạch, gọi các công cụ (như truy xuất), xử lý song song và tích hợp các nguồn dữ liệu mới một cách linh hoạt.
+•	Các tính năng chính và lợi ích:
+o	Diễn giải ý định chính xác: Hiểu rõ ý định thực sự của người dùng để đưa ra câu trả lời phù hợp và đáng tin cậy.
+o	Thiết kế mô-đun: Dễ dàng tích hợp các nguồn dữ liệu và tính năng mới (ví dụ: thêm một API mới) mà không cần thay đổi toàn bộ hệ thống.
+o	Xử lý song song: Tăng cường hiệu suất trong các tác vụ phức tạp bằng cách chạy các tác tử đồng thời.
+•	Mô tả Sơ đồ kiến trúc: Trái tim của hệ thống là Ứng dụng tác tử AI (AI Agent Application). Khi nhận đầu vào, nó sẽ tương tác với một loạt các chức năng có sẵn (Available Functions), bao gồm các chức năng truy xuất (Retrieval Functions). Các chức năng này có thể truy cập vào kho tri thức bền vững (Persistent Knowledge) dưới nhiều dạng khác nhau như Graph DB, Vector DB, hoặc Relational DB. Tác tử sau đó gửi một lời nhắc (prompt) cùng với thông tin về các công cụ có sẵn đến Lớp LLM (LLM Layer). Lớp LLM sẽ xử lý thông tin này và trả về kết quả, hoàn thành tác vụ được giao.
+7. Adaptive RAG (RAG Thích ứng)
+Việc truy xuất dữ liệu không phải lúc nào cũng cần thiết, đặc biệt là khi LLM đã biết câu trả lời. Adaptive RAG giải quyết bài toán hiệu quả này bằng cách quyết định khi nào nên và không nên truy xuất.
+Định nghĩa: Tự động quyết định khi nào cần truy xuất kiến thức bên ngoài, cân bằng giữa kiến thức nội tại và bên ngoài.
+•	Mục đích chính: Cải thiện hiệu quả bằng cách tránh các lần truy xuất không cần thiết khi mô hình đã tự tin vào kiến thức nội tại của mình. Điều này giúp tiết kiệm tài nguyên tính toán và giảm độ trễ.
+•	Các tính năng chính và lợi ích:
+o	Sử dụng điểm tin cậy: Đánh giá sự cần thiết của việc truy xuất dựa trên điểm tin cậy từ trạng thái nội tại của LLM.
+o	"Honesty probe": Giúp mô hình tránh bịa đặt bằng cách đối chiếu kết quả đầu ra với kiến thức thực tế của nó.
+o	Giảm truy xuất không cần thiết: Cải thiện cả hiệu quả và độ chính xác của phản hồi, chỉ tìm kiếm khi thực sự cần.
+•	Mô tả Sơ đồ kiến trúc: Khi nhận được một truy vấn (Query), hệ thống đầu tiên sẽ kiểm tra "Có liên quan đến chỉ mục không?" (Is related to index?). Nếu không, nó sẽ thực hiện tìm kiếm web (Web search). Nếu có, bộ truy xuất (Retriever) sẽ lấy tài liệu và hệ thống chấm điểm (Grading) chúng. Tiếp theo, hệ thống kiểm tra "Tài liệu có liên quan không?" (Is Doc Relevant?). Nếu có, nó tiếp tục hỏi "Có chứa câu trả lời không?" (Does contain answer?). Nếu câu trả lời là có, hệ thống sẽ tạo văn bản (Generate Text). Nếu câu trả lời là không, câu hỏi sẽ được viết lại (Re-write Question) và quay lại bộ truy xuất. Sau khi văn bản được tạo, một bước kiểm tra cuối cùng sẽ diễn ra: nếu có dấu hiệu bịa đặt (Hallucinations), hệ thống sẽ trả lời dựa trên kết quả tìm kiếm web (Answer with web search). Nếu không, câu trả lời (Answer) sẽ được đưa ra.
+Các mẫu Nâng cao cho thấy cách chúng ta có thể làm cho RAG thông minh hơn và hiệu quả hơn. Bây giờ, chúng ta sẽ chuyển sang các mẫu Chuyên biệt, được thiết kế để giải quyết các nhiệm vụ cụ thể như trả lời câu hỏi phức tạp hoặc tương tác với môi trường.
+Phần III: Các Mẫu Chuyên Biệt (Specialized Patterns)
+Các mẫu này được tinh chỉnh cho các nhiệm vụ hoặc loại dữ liệu cụ thể, thường vượt trội hơn các phương pháp tổng quát trong các lĩnh vực đó. Chúng là những công cụ chuyên dụng trong bộ công cụ RAG của bạn.
+8. REFEED (Retrieval Feedback)
+Làm thế nào để cải thiện câu trả lời mà không cần huấn luyện lại toàn bộ mô hình? REFEED cung cấp một phương pháp hiệu quả để tinh chỉnh kết quả đầu ra một cách linh hoạt.
+Định nghĩa: Tinh chỉnh kết quả đầu ra của mô hình bằng cách sử dụng phản hồi từ việc truy xuất mà không cần tinh chỉnh lại mô hình (fine-tuning).
+•	Mục đích chính: Cải thiện chất lượng của câu trả lời ban đầu bằng cách truy xuất các tài liệu liên quan dựa trên chính câu trả lời đó, sau đó điều chỉnh câu trả lời dựa trên thông tin mới tìm thấy.
+•	Các tính năng chính và lợi ích:
+o	Cải thiện câu trả lời ban đầu: Sử dụng các câu trả lời ban đầu làm điểm khởi đầu để tìm kiếm thông tin bổ sung và điều chỉnh phản hồi.
+o	Tạo nhiều câu trả lời: Tạo ra nhiều câu trả lời ứng viên để cải thiện độ chính xác và phạm vi của việc truy xuất.
+o	Kết hợp đầu ra: Kết hợp các kết quả đầu ra trước và sau khi truy xuất bằng hệ thống xếp hạng để tăng cường độ tin cậy của câu trả lời.
+•	Mô tả Sơ đồ kiến trúc: Từ truy vấn đầu vào (Input Query), hệ thống tạo ra nhiều câu trả lời (Multiple Answers) ban đầu. Dựa trên những câu trả lời này, các đoạn văn liên quan (Retrieved Passages) được truy xuất. Sau đó, hệ thống thực hiện bước kết hợp truy vấn-đoạn văn (Query-Passage Combination). Cuối cùng, một quá trình đánh giá tổng hợp diễn ra, bao gồm Ensemble Evaluation và Likelihood Comparison, để tạo ra câu trả lời cuối cùng (Final Answer) chất lượng cao nhất.
+9. REALM
+Để trả lời các câu hỏi miền mở, mô hình cần truy cập vào một kho kiến thức khổng lồ. REALM được thiết kế để tích hợp kiến thức này trực tiếp vào quá trình huấn luyện.
+Định nghĩa: Truy xuất các tài liệu liên quan từ các kho văn bản lớn như Wikipedia để nâng cao khả năng dự đoán của mô hình.
+•	Mục đích chính: Cải thiện độ chính xác trong các nhiệm vụ trả lời câu hỏi miền mở (Open-domain Question Answering) bằng cách huấn luyện đồng thời bộ truy xuất và mô hình ngôn ngữ.
+•	Các tính năng chính và lợi ích:
+o	Huấn luyện với mô hình ngôn ngữ che dấu (masked language modeling): Bộ truy xuất được huấn luyện để tối ưu hóa việc tìm kiếm tài liệu giúp mô hình dự đoán từ bị che tốt hơn.
+o	Tìm kiếm hiệu quả: Sử dụng Tìm kiếm Tích trong Cực đại (Maximum Inner Product Search) để tìm tài liệu liên quan một cách hiệu quả trong quá trình huấn luyện.
+o	Hiệu suất vượt trội: Vượt qua các mô hình trước đó trong việc trả lời câu hỏi miền mở bằng cách tích hợp kiến thức bên ngoài một cách chặt chẽ.
+•	Mô tả Sơ đồ kiến trúc: REALM có hai giai đoạn chính. Trong Giai đoạn Tiền huấn luyện không giám sát (Unsupervised Pre-training), mô hình học cách truy xuất và mã hóa kiến thức từ một kho văn bản lớn. Trong Giai đoạn Tinh chỉnh có giám sát (Supervised Fine-tuning), mô hình được tinh chỉnh thêm với các cặp truy vấn-đầu vào cụ thể để tối ưu hóa hiệu suất cho các tác vụ hỏi-đáp.
+10. RAPTOR (Tree-Organized)
+Các câu hỏi phức tạp thường đòi hỏi sự kết hợp giữa thông tin tổng quan và chi tiết cụ thể. RAPTOR giải quyết vấn đề này bằng cách tổ chức kiến thức theo cấu trúc cây.
+Định nghĩa: Xây dựng một cây phân cấp bằng cách phân cụm và tóm tắt văn bản một cách đệ quy.
+•	Mục đích chính: Cho phép truy xuất thông tin ở nhiều cấp độ trừu tượng khác nhau, từ các chủ đề rộng lớn ở gốc cây đến các chi tiết cụ thể ở các lá, đặc biệt hiệu quả cho các câu hỏi phức tạp.
+•	Các tính năng chính và lợi ích:
+o	Truy xuất ở các cấp độ trừu tượng khác nhau: Kết hợp các chủ đề rộng với các chi tiết cụ thể để có câu trả lời toàn diện.
+o	Vượt trội trong các nhiệm vụ phức tạp: Hiệu quả hơn các phương pháp truyền thống trong việc trả lời các câu hỏi đòi hỏi sự tổng hợp thông tin từ nhiều nguồn.
+o	Truy xuất hiệu quả: Cung cấp các phương pháp duyệt cây (tree traversal) và cây thu gọn (collapsed tree) để truy xuất thông tin nhanh chóng.
+•	Mô tả Sơ đồ kiến trúc: Một truy vấn (Query) được đưa vào bộ mã hóa (Encoder) để tạo ra một truy vấn đã mã hóa (Encoded Query). Truy vấn này sau đó được sử dụng để truy xuất thông tin từ cả Cấu trúc Cây (Tree Structure) và Cấu trúc Cây thu gọn (Collapsed tree structure). Ngữ cảnh được truy xuất (Retrieved Context) được kết hợp với truy vấn ban đầu và đưa vào LLM để tạo ra câu trả lời (Answer).
+11. REVEAL (for Visual-Language Model)
+Làm thế nào để một hệ thống RAG có thể hiểu và trả lời các câu hỏi liên quan đến cả hình ảnh và văn bản? REVEAL là câu trả lời.
+Định nghĩa: Một kiến trúc chuyên biệt cho các nhiệm vụ hiểu ngôn ngữ-thị giác, tích hợp bộ truy xuất để lấy kiến thức liên quan từ cả văn bản và hình ảnh nhằm tạo ra câu trả lời.
+•	Mục đích chính: Được thiết kế đặc biệt cho các nhiệm vụ hiểu ngôn ngữ-thị giác (visual-language understanding), cho phép mô hình kết hợp thông tin từ cả hai phương thức để trả lời các câu hỏi đa phương tiện.
+•	Các tính năng chính và lợi ích:
+o	Thành phần chính: Bao gồm Vision Transformer, T5 Encoder, và Knowledge Fusion để xử lý và tích hợp thông tin hình ảnh và văn bản.
+o	Thiết kế cho nhiệm vụ ngôn ngữ-thị giác: Tối ưu hóa cho các ứng dụng đòi hỏi sự hiểu biết kết hợp giữa hình ảnh và văn bản, chẳng hạn như trả lời câu hỏi về hình ảnh.
+•	Mô tả Sơ đồ kiến trúc: Truy vấn đầu vào (Input Query), có thể chứa cả văn bản và hình ảnh, được xử lý bởi các bộ mã hóa (Query Encoding) như Vision Transformer và T5 Encoder. Sau khi được mã hóa bộ nhớ (Memory Encoding), thông tin này được bộ truy xuất (Retriever) sử dụng để tìm kiếm trong cơ sở tri thức (Knowledge Base). Thông tin được truy xuất sau đó được hợp nhất (Knowledge Fusion) và đưa vào bộ tạo sinh (Generator) để tạo ra kết quả đầu ra (Output).
+12. REACT
+Để giải quyết các nhiệm vụ phức tạp, đôi khi chỉ lý luận là không đủ; mô hình cần phải hành động và tương tác với môi trường. REACT cho phép điều đó.
+Định nghĩa: Kết hợp lý luận và hành động, cho phép các mô hình tương tác với môi trường của chúng.
+•	Mục đích chính: Cho phép LLM giải quyết các nhiệm vụ phức tạp bằng cách tạo ra một chu trình suy nghĩ-hành động-quan sát. Điều này giúp nó lập kế hoạch, thực thi và điều chỉnh hành động dựa trên phản hồi từ môi trường, tương tự như cách con người giải quyết vấn đề.
+•	Các tính năng chính và lợi ích:
+o	Duy trì nhận thức tình huống: Cập nhật ngữ cảnh với các hành động và suy nghĩ trong quá khứ.
+o	Tạo ra suy nghĩ phù hợp với nhiệm vụ: Hướng dẫn việc ra quyết định logic.
+o	Phản hồi thời gian thực: Tinh chỉnh sự hiểu biết, giảm lỗi và tăng cường tính minh bạch.
+o	Giảm thiểu lỗi: Nền tảng hóa lý luận trong các sự kiện thực tế, giảm thiểu hiện tượng bịa đặt.
+o	Các bước giải quyết nhiệm vụ rõ ràng, giống con người: Cung cấp các bước giải quyết vấn đề minh bạch.
+•	Mô tả Sơ đồ kiến trúc: Đây là một vòng lặp động. Hệ thống nhận một quan sát (Receive Observation) và ngay lập tức cập nhật ngữ cảnh (Update Context). Dựa trên ngữ cảnh mới, nó tạo ra một suy nghĩ (Generate Thought) để lập kế hoạch cho hành động tiếp theo. Sau đó, nó tạo ra một hành động (Generate Action). Hành động này tạo ra một quan sát mới (New Received Observation), và vòng lặp tiếp tục, cập nhật lại ngữ cảnh cho đến khi nhiệm vụ hoàn thành.
+13. REPLUG (Retrieval Plugin)
+Làm thế nào để nâng cấp một LLM hiện có với khả năng RAG mà không cần sửa đổi kiến trúc cốt lõi của nó? REPLUG cung cấp một giải pháp "cắm và chạy".
+Định nghĩa: Nâng cao LLM bằng cách truy xuất các tài liệu bên ngoài có liên quan để cải thiện độ chính xác của dự đoán.
+•	Mục đích chính: Hoạt động như một plugin linh hoạt, có thể được thêm vào các LLM hiện có mà không cần sửa đổi. Nó cải thiện hiệu suất bằng cách cung cấp ngữ cảnh bổ sung vào đầu vào của mô hình.
+•	Các tính năng chính và lợi ích:
+o	Xem LLM như 'hộp đen': Coi mô hình ngôn ngữ như một 'hộp đen' cố định, chỉ cần thêm thông tin được truy xuất vào đầu vào.
+o	Thiết kế linh hoạt: Hoạt động với các mô hình hiện có mà không cần sửa đổi kiến trúc phức tạp.
+o	Tinh chỉnh thành phần truy xuất: Thành phần truy xuất có thể được tinh chỉnh với phản hồi từ mô hình, giúp nó học cách tìm kiếm thông tin mà LLM cần nhất.
+•	Mô tả Sơ đồ kiến trúc: Từ đầu vào (Input [prompt]), hệ thống thực hiện truy xuất tài liệu (Document Retrieval). Đầu vào sau đó được định dạng lại (Input Reformulation) và đưa vào các dự đoán LLM song song (Parallel LM Predictions). Các dự đoán này được tổng hợp (Ensemble Predictions) để tạo ra kết quả cuối cùng (Final Output). Quan trọng là, có một vòng lặp huấn luyện (Language Model-Supervised Retrieval) để liên tục tinh chỉnh bộ truy xuất dựa trên phản hồi của LLM.
+Các mẫu chuyên biệt cung cấp các giải pháp mạnh mẽ cho các vấn đề cụ thể. Tiếp theo, chúng ta sẽ xem xét các mẫu Tối ưu hóa, tập trung vào việc cải thiện hiệu quả, giảm chi phí và tự động hóa việc cấu hình hệ thống RAG.
+Phần IV: Các Mẫu Tối Ưu Hóa (Optimized Patterns)
+Các mẫu này tập trung vào hiệu quả, chi phí và tự động hóa, những yếu tố quan trọng để triển khai các hệ thống RAG trong thực tế ở quy mô lớn.
+14. MEMO RAG
+Các truy vấn mơ hồ thường khiến các hệ thống RAG tiêu chuẩn gặp khó khăn. MEMO RAG được thiết kế để xử lý những trường hợp này một cách thông minh.
+Định nghĩa: Kết hợp bộ nhớ và truy xuất để xử lý các truy vấn phức tạp.
+•	Mục đích chính: Xử lý các truy vấn mơ hồ hoặc phức tạp bằng cách sử dụng một mô hình nhẹ để tạo ra các "gợi ý" ban đầu, sau đó hướng dẫn bộ truy xuất tìm kiếm thông tin chi tiết hơn, giống như việc ghi nhớ lại thông tin trước khi tìm kiếm.
+•	Các tính năng chính và lợi ích:
+o	Mô hình bộ nhớ tạo bản nháp: Một mô hình nhẹ (Light LLM) tạo ra các câu trả lời nháp để hướng dẫn tìm kiếm thông tin bên ngoài.
+o	Bộ truy xuất thu thập dữ liệu: Một bộ truy xuất thu thập dữ liệu liên quan mà một mô hình ngôn ngữ mạnh hơn (Heavy LLM) sử dụng để tạo ra câu trả lời cuối cùng toàn diện.
+o	Quản lý truy vấn mơ hồ: Giúp làm rõ các truy vấn không rõ ràng và xử lý hiệu quả lượng lớn thông tin.
+•	Mô tả Sơ đồ kiến trúc: Truy vấn của người dùng (User Input Query) đầu tiên được đưa vào một Mô hình Bộ nhớ (Memory Model - Light LLM). Mô hình này tạo ra các gợi ý (Generates Clues). Dựa trên những gợi ý này, bộ truy xuất (Clue-Based Retriever) sẽ tìm kiếm và lấy về ngữ cảnh (Retrieves Context). Cuối cùng, ngữ cảnh này được đưa vào một mô hình mạnh hơn để tạo câu trả lời (Answer Generation - Heavy LLM), tạo ra một câu trả lời (Answer) chi tiết.
+15. ATLAS (Attention-based RAG)
+Việc huấn luyện riêng rẽ bộ truy xuất và bộ tạo sinh có thể dẫn đến sự không tương thích. ATLAS giải quyết vấn đề này bằng cách huấn luyện chúng cùng nhau.
+Định nghĩa: ATLAS cải thiện các mô hình ngôn ngữ bằng cách truy xuất các tài liệu bên ngoài để nâng cao độ chính xác.
+•	Mục đích chính: Tối ưu hóa mô hình bằng cách huấn luyện đồng thời bộ truy xuất và bộ tạo sinh. Điều này giúp chúng phối hợp tốt hơn và giảm sự phụ thuộc vào việc ghi nhớ thông tin trong các tham số của mô hình.
+•	Các tính năng chính và lợi ích:
+o	Bộ truy xuất bộ mã hóa kép (dual-encoder): Sử dụng một bộ truy xuất mạnh mẽ để xác định các tài liệu liên quan hàng đầu.
+o	Mô hình Fusion-in-Decoder: Tích hợp thông tin truy vấn và tài liệu một cách hiệu quả, giảm sự phụ thuộc vào việc ghi nhớ.
+o	Chỉ mục tài liệu có thể cập nhật: Đây là một lợi ích lớn. Chỉ mục tài liệu có thể được cập nhật mà không cần huấn luyện lại toàn bộ mô hình, giúp kiến thức luôn mới mẻ mà không tốn kém.
+•	Mô tả Sơ đồ kiến trúc: Kho văn bản được lập chỉ mục (Indexed Corpus) và truy vấn đầu vào (Input Query) được mã hóa. Bộ truy xuất (Retriever) tìm các tài liệu liên quan. Mô hình ngôn ngữ (Language Model) xử lý truy vấn và tài liệu để tạo ra kết quả (Output). Điểm mấu chốt là vòng lặp tinh chỉnh huấn luyện chung (joint training fine-tuning), giúp tối ưu hóa cả bộ truy xuất và mô hình ngôn ngữ cùng nhau.
+16. RETRO
+Làm thế nào để một mô hình nhỏ có thể đạt được hiệu suất của một mô hình lớn hơn nhiều lần? RETRO cho thấy cách truy xuất thông tin có thể giúp thu hẹp khoảng cách này.
+Định nghĩa: Phân chia văn bản đầu vào thành các đoạn (chunks) và truy xuất thông tin tương tự từ một cơ sở dữ liệu văn bản lớn.
+•	Mục đích chính: Cho phép các mô hình nhỏ hơn truy cập vào kiến thức rộng lớn mà không cần tăng kích thước, giúp giảm đáng kể yêu cầu tính toán và chi phí vận hành.
+•	Các tính năng chính và lợi ích:
+o	Sử dụng embedding BERT đã được huấn luyện trước: Dùng để lấy các đoạn văn bản liên quan từ cơ sở dữ liệu.
+o	Cơ chế chú ý chéo theo đoạn (Chunked cross-attention): Tích hợp các đoạn này một cách thông minh, cải thiện dự đoán mà không làm tăng đáng kể kích thước mô hình.
+o	Truy cập kiến thức sâu rộng: Cung cấp hiệu suất tương đương các mô hình lớn hơn với yêu cầu tính toán thấp hơn nhiều.
+•	Mô tả Sơ đồ kiến trúc: Đầu vào (Input) được chia thành các đoạn (chunks). Các đoạn này được chuyển thành các embedding BERT (BERT Embeddings) và sau đó sử dụng truy xuất K-NN (K-NN Retrieval) để tìm các đoạn tương tự. Thông tin này được xử lý bởi bộ mã hóa (Encoder) và cơ chế chú ý chéo theo đoạn (Chunked Cross-Attention) để tạo ra kết quả (Output).
+17. AUTO RAG
+Cấu hình một pipeline RAG tối ưu là một công việc phức tạp. AUTO RAG được tạo ra để tự động hóa quy trình này.
+Định nghĩa: Tự động hóa việc tối ưu hóa cho các hệ thống RAG.
+•	Mục đích chính: Tự động tìm ra cấu hình tốt nhất cho các thành phần khác nhau của một pipeline RAG (như mở rộng truy vấn, truy xuất, xếp hạng lại) để đạt được hiệu suất tối ưu mà không cần sự can thiệp thủ công tốn thời gian.
+•	Các tính năng chính và lợi ích:
+o	Đánh giá các mô-đun: Tự động đánh giá hiệu suất của các mô-đun như mở rộng truy vấn, truy xuất và xếp hạng lại.
+o	Sử dụng cấu trúc dựa trên nút, mô-đun: Để kiểm tra các cấu hình khác nhau một cách có hệ thống.
+o	Cách tiếp cận tối ưu hóa tham lam (greedy): Nâng cao hiệu quả trên các bộ dữ liệu khác nhau một cách nhanh chóng.
+•	Mô tả Sơ đồ kiến trúc: Truy vấn của người dùng (User Input Query) đi qua một chuỗi các mô-đun có thể được tối ưu hóa, bắt đầu từ Mở rộng Truy vấn (Query Expansion) và Truy xuất (Retriever). Các đoạn văn bản sau đó được tăng cường (Passage Augmentation) và xếp hạng lại (Passage Reranking). Cuối cùng, một lời nhắc (Prompt Creation) được tạo ra và đưa vào bộ tạo sinh (Generator) để tạo kết quả (Output).
+18. CORAG (Cost-Constrained RAG)
+Trong thực tế, việc truy xuất luôn đi kèm với chi phí (thời gian, tiền bạc). CORAG tối ưu hóa việc lựa chọn thông tin trong khi vẫn cân nhắc đến các ràng buộc về chi phí.
+Định nghĩa: Tối ưu hóa việc lựa chọn các đoạn liên quan từ cơ sở dữ liệu.
+•	Mục đích chính: Giải quyết thách thức lựa chọn sự kết hợp tối ưu của các đoạn văn bản trong khi cân nhắc các ràng buộc về chi phí (ví dụ: chi phí tính toán, độ trễ), đảm bảo hiệu quả cao nhất trong ngân sách cho phép.
+•	Các tính năng chính và lợi ích:
+o	Giải quyết ba thách thức: Tương quan hiệu quả, tiện ích không đơn điệu và các loại truy vấn đa dạng.
+o	Sử dụng Tìm kiếm Cây Monte Carlo (MCTS): Để tìm sự kết hợp đoạn tối ưu trong khi tính đến các ràng buộc về chi phí.
+o	Cải thiện lên đến 30%: So với các mô hình cơ sở trong việc cân bằng giữa chất lượng và chi phí.
+•	Mô tả Sơ đồ kiến trúc: Sau khi nhận truy vấn (Query) và tạo embedding, hệ thống truy xuất các đoạn tiềm năng (Retrieve Potential Chunks). Sau đó, một Tác tử Cấu hình (Configuration Agent) sẽ thiết lập các tham số cho Tìm kiếm Chính sách MCTS (MCTS Policy Tree Search). Quá trình tìm kiếm này sẽ xác định Sự kết hợp đoạn tối ưu (Optimal Chunk Combination), được sử dụng cho tạo sinh LLM (LLM Generation) và đưa ra kết quả cuối cùng (Final Output).
+19. EACO-RAG
+Đối với các ứng dụng thời gian thực như xe tự lái hoặc thiết bị IoT, độ trễ là yếu tố sống còn. EACO-RAG đưa RAG ra "biên" để giải quyết vấn đề này.
+Định nghĩa: Nâng cao RAG với tính toán biên (edge computing) để có phản hồi nhanh hơn, hiệu quả hơn.
+•	Mục đích chính: Phân phối xử lý RAG trên các thiết bị biên (edge devices), giảm độ trễ và tối ưu hóa việc sử dụng tài nguyên cho các ứng dụng thời gian thực mà không cần gửi mọi yêu cầu lên đám mây.
+•	Các tính năng chính và lợi ích:
+o	Phân phối tập dữ liệu vector: Các tập dữ liệu vector được phân phối trên các nút biên, giảm độ trễ và tối ưu hóa tài nguyên.
+o	Cập nhật kiến thức thích ứng: Cập nhật kiến thức thích ứng và cộng tác giữa các nút giúp cải thiện độ chính xác theo thời gian.
+o	Cách tiếp cận multi-armed bandit: Tối ưu hóa đồng thời chi phí, độ chính xác và độ trễ trong thời gian thực.
+•	Mô tả Sơ đồ kiến trúc: Truy vấn của người dùng (User Input Query) được xử lý cục bộ (Local processing) trên thiết bị biên. Dựa trên việc cập nhật kiến thức thích ứng (Adaptive knowledge update), hệ thống thực hiện cộng tác giữa các nút (Inter-node Collaboration) và lựa chọn tuyến đường tối ưu (Optimal Route Selection). Nếu xử lý cục bộ là không đủ, yêu cầu sẽ được gửi đến xử lý trên đám mây (Cloud Processing) để tạo ra phản hồi (Response).
+Việc tối ưu hóa hệ thống là rất quan trọng để triển khai trong thực tế. Cuối cùng, chúng ta sẽ khám phá các mẫu Theo Lĩnh vực cụ thể, giải quyết các thách thức độc đáo trong các lĩnh vực như hội thoại, dịch thuật và xử lý các truy vấn phức tạp.
+Phần V: Các Mẫu Theo Lĩnh Vực Cụ Thể (Domain-Specific Patterns)
+Các mẫu này được điều chỉnh cho các lĩnh vực ứng dụng cụ thể, đòi hỏi các cách tiếp cận chuyên biệt để đạt được hiệu suất cao nhất. Chúng thể hiện sự trưởng thành của RAG khi giải quyết các vấn đề chuyên sâu.
+20. RULE RAG
+Trong nhiều lĩnh vực như pháp lý hay tài chính, câu trả lời phải tuân thủ các quy tắc nghiêm ngặt. RULE RAG đảm bảo điều này.
+Định nghĩa: Thêm hướng dẫn dựa trên quy tắc vào RAG để trả lời câu hỏi.
+•	Mục đích chính: Tích hợp các quy tắc được xác định trước để hướng dẫn cả quá trình truy xuất và quá trình tạo sinh, đảm bảo câu trả lời tuân thủ các ràng buộc logic và ngữ cảnh cụ thể của một lĩnh vực.
+•	Các tính năng chính và lợi ích:
+o	Truy xuất tài liệu liên quan về mặt logic: Sử dụng các quy tắc được xác định trước để lọc và ưu tiên các tài liệu.
+o	Sử dụng quy tắc để hướng dẫn tạo câu trả lời: Đảm bảo độ chính xác và tuân thủ các quy định.
+o	Bao gồm học trong ngữ cảnh (ICL) và phiên bản tinh chỉnh (FT): Cung cấp các phương pháp linh hoạt để tích hợp quy tắc.
+•	Mô tả Sơ đồ kiến trúc: Quy trình này tích hợp các quy tắc ở hai giai đoạn quan trọng. Từ truy vấn đầu vào (Input Query), hệ thống áp dụng các quy tắc để hướng dẫn truy xuất (Apply Rules to Guide Retrieval). Sau khi truy xuất các tài liệu liên quan (Retrieve Relevant Documents), hệ thống tiếp tục áp dụng các quy tắc để hướng dẫn tạo sinh (Apply Rules to Guide Generation). Cuối cùng, bộ tạo sinh (Generator) tạo ra một câu trả lời (Answer) tuân thủ các quy tắc đã định.
+21. CORAL (Conversational RAG)
+Các cuộc hội thoại không phải là một chuỗi các câu hỏi độc lập. CORAL được tạo ra để đánh giá và cải thiện RAG trong bối cảnh hội thoại nhiều lượt.
+Định nghĩa: Đánh giá RAG hội thoại nhiều lượt bằng cách sử dụng dữ liệu từ Wikipedia.
+•	Mục đích chính: Giải quyết những thách thức của các cuộc hội thoại nhiều lượt bằng cách đánh giá các khía cạnh như truy xuất đoạn văn, tạo phản hồi và ghi nhãn trích dẫn trong một bối cảnh thực tế, nơi các câu hỏi sau phụ thuộc vào các câu hỏi trước.
+•	Các tính năng chính và lợi ích:
+o	Đánh giá truy xuất đoạn văn, tạo phản hồi và ghi nhãn trích dẫn.
+o	Xử lý các cuộc hội thoại nhiều lượt, thực tế, miền mở.
+o	Bắc cầu giữa nghiên cứu RAG một lượt và nhu cầu nhiều lượt trong thế giới thực.
+•	Mô tả Sơ đồ kiến trúc: Luồng bắt đầu từ nguồn dữ liệu (Data Source), nơi diễn ra Trích xuất Tiêu đề (Title Extraction) và Lấy mẫu luồng hội thoại (Conversation Flow Sampling). Dữ liệu này sau đó được ngữ cảnh hóa (Contextualization) để tạo ra các tác vụ đánh giá (Benchmark Tasks). Các tác vụ này bao gồm Tạo phản hồi (Response Generation), Truy xuất đoạn văn (Passage Retrieval) và Ghi nhãn trích dẫn (Citation Labeling).
+22. Iterative RAG
+Đôi khi, một lần truy xuất là không đủ để tìm ra câu trả lời đúng. Iterative RAG học cách tinh chỉnh tìm kiếm của mình qua nhiều bước.
+Định nghĩa: Thực hiện nhiều bước truy xuất, tinh chỉnh tìm kiếm dựa trên phản hồi từ các tài liệu đã chọn trước đó.
+•	Mục đích chính: Cải thiện hiệu suất truy xuất thông qua học tăng cường (reinforcement learning), nơi hệ thống học cách đưa ra các quyết định truy xuất tốt hơn theo thời gian dựa trên phần thưởng phản hồi, giống như việc học từ kinh nghiệm.
+•	Các tính năng chính và lợi ích:
+o	Các quyết định truy xuất tuân theo quy trình quyết định Markov.
+o	Học tăng cường cải thiện hiệu suất truy xuất: Hệ thống tự động học chiến lược truy xuất tối ưu.
+o	Duy trì một trạng thái nội bộ: Để điều chỉnh các bước truy xuất trong tương lai dựa trên kiến thức tích lũy.
+•	Mô tả Sơ đồ kiến trúc: Từ truy vấn đầu vào (Input Query), một bộ truy xuất lặp có trạng thái (Stateful Iterative Retriever) thực hiện tìm kiếm và truy xuất tài liệu (Retrieve Documents). Các ví dụ điển hình được chọn (Select Exemplars) và đưa vào LLM để tạo ra một câu trả lời (Answer). Câu trả lời này sau đó tạo ra Phản hồi phần thưởng (Reward Feedback), được sử dụng cho Tối ưu hóa chính sách (Policy Optimization), giúp bộ truy xuất trở nên thông minh hơn cho các lần sau.
+23. ConTReGen (Context-driven Tree-structured Retrieval)
+Đối với các câu hỏi phức tạp đòi hỏi câu trả lời dài và có cấu trúc, việc truy xuất một vài đoạn văn bản là không đủ. ConTReGen giải quyết vấn đề này bằng cách chia nhỏ vấn đề.
+Định nghĩa: Phân rã các truy vấn phức tạp thành các truy vấn con phân cấp, nâng cao độ sâu truy xuất thông qua cách tiếp cận cấu trúc cây.
+•	Mục đích chính: Xử lý các truy vấn phức tạp bằng cách chia chúng thành các phần nhỏ hơn, có thể quản lý được (từ trên xuống), sau đó tổng hợp thông tin từ dưới lên để tạo ra các câu trả lời dài và toàn diện.
+•	Các tính năng chính và lợi ích:
+o	Quy trình làm việc hai giai đoạn: Khám phá từ trên xuống tạo ra một cây đoạn văn, sau đó tổng hợp từ dưới lên để tạo ra các phản hồi dài.
+o	Giảm khoảng trống thông tin và cải thiện chất lượng nội dung được tạo ra.
+o	Cho phép truy xuất ở nhiều cấp độ trừu tượng để có câu trả lời toàn diện.
+•	Mô tả Sơ đồ kiến trúc: Mẫu này có hai giai đoạn rõ rệt. Giai đoạn Lập kế hoạch & Truy xuất từ trên xuống (Top-Down Planning & Retrieval Stage) phân tích truy vấn đầu vào (Input Query) để tạo các truy vấn con, từ đó truy xuất và xác minh các đoạn văn, và cuối cùng là xây dựng một cây (Build Tree). Sau đó, Giai đoạn Tổng hợp & Tạo sinh từ dưới lên (Bottom-Up Synthesis & Generation Stage) bắt đầu từ các nút lá của cây, tóm tắt và tích hợp nội dung dần lên trên để tạo ra phản hồi (Response) cuối cùng.
+24. CRAT (Causality-Enhanced Reflective and Retrieval-Augmented Translation)
+Dịch thuật là một nhiệm vụ đầy thách thức, đặc biệt là với các thuật ngữ mơ hồ. CRAT sử dụng một hệ thống đa tác tử để đảm bảo độ chính xác.
+Định nghĩa: Khung làm việc đa tác tử giúp tăng cường khả năng dịch thuật bằng cách phát hiện, làm rõ và dịch các thuật ngữ mơ hồ bằng cách sử dụng xác thực quan hệ nhân quả.
+•	Mục đích chính: Cải thiện độ chính xác và tính nhất quán của bản dịch bằng cách sử dụng một hệ thống đa tác tử để xác định các thuật ngữ không rõ ràng, xây dựng đồ thị tri thức và xác thực bản dịch dựa trên quan hệ nhân quả logic.
+•	Các tính năng chính và lợi ích:
+o	Kết hợp các nguồn kiến thức nội tại và bên ngoài: Để nắm bắt ngữ cảnh cho việc sử dụng thuật ngữ chính xác.
+o	Sử dụng một tác tử thẩm phán (judge agent): Để xác thực thông tin và đảm bảo các bản dịch phù hợp với ngữ cảnh.
+o	Cung cấp các bản dịch chính xác, nhất quán: Bằng cách tận dụng kiến thức đã được xác thực và các mối quan hệ nhân quả.
+•	Mô tả Sơ đồ kiến trúc: Từ ngữ cảnh nguồn đầu vào (Source Context Input), một Bộ phát hiện thuật ngữ không xác định (Unknown Terms Detector) sẽ xác định các từ mơ hồ. Sau đó, một Bộ xây dựng Đồ thị Tri thức (Knowledge Graph Constructor) được sử dụng để xây dựng ngữ cảnh. Một Thẩm phán tăng cường nhân quả (Causality-enhanced Judge) sẽ xác thực thông tin này. Cuối cùng, thông tin đã được xác thực sẽ hỗ trợ Bộ dịch (Translator) để tạo ra kết quả (Output) chính xác.
+25. Graph RAG
+Dữ liệu không chỉ là các đoạn văn bản rời rạc; nó chứa đầy các mối quan hệ. Graph RAG khai thác các mối quan hệ này để truy xuất thông minh hơn.
+Định nghĩa: Xây dựng một đồ thị tri thức tức thời (on-the-fly), liên kết các thực thể có liên quan trong quá trình truy xuất.
+•	Mục đích chính: Tận dụng các mối quan hệ có cấu trúc trong dữ liệu. Thay vì chỉ tìm kiếm sự tương đồng về văn bản, Graph RAG hiểu các mối liên kết giữa các khái niệm, giúp hệ thống quyết định một cách thông minh khi nào cần truy xuất thêm thông tin và khi nào nên dừng lại.
+•	Các tính năng chính và lợi ích:
+o	Tận dụng các mối quan hệ giữa các nút: Để quyết định khi nào và bao nhiêu kiến thức bên ngoài cần truy xuất, giúp truy xuất có chiều sâu hơn.
+o	Điểm tin cậy từ đồ thị hướng dẫn việc mở rộng: Tránh thêm các thông tin không liên quan, giữ cho ngữ cảnh luôn tập trung.
+o	Cải thiện hiệu quả và độ chính xác: Bằng cách giữ cho đồ thị tri thức nhỏ gọn và phù hợp với truy vấn.
+•	Mô tả Sơ đồ kiến trúc: Trong giai đoạn chuẩn bị, tài liệu (Documents) được xử lý và lưu trữ trong cả Kho Vector (Vector Store) cho tìm kiếm tương đồng và Cơ sở dữ liệu Đồ thị (GraphDB) cho các mối quan hệ cấu trúc. Khi người dùng đưa ra lời nhắc (Prompt), hệ thống lấy ngữ cảnh (Context) từ cả hai nguồn này. LLM sau đó sử dụng lời nhắc và ngữ cảnh kết hợp phong phú này để tạo ra một phản hồi (Response) thông minh và sâu sắc hơn.
+Phần VI: Các Mẫu Bổ Sung từ Bản Đồ Kiến Trúc (Additional Patterns)
+Các mẫu này tập trung vào việc xử lý ngữ nghĩa (semantic), ngữ cảnh cấu trúc dữ liệu và bảo mật, phản ánh các nhu cầu thực tế khi triển khai RAG trong môi trường doanh nghiệp phức tạp.
+26. HyDE (Hypothetical Document Embeddings) Trong danh sách gốc, chúng ta có các mẫu viết lại truy vấn, nhưng HyDE là một biến thể cụ thể sử dụng "ảo giác" của LLM một cách có chủ đích để tìm kiếm tốt hơn.
+• Định nghĩa: Sử dụng LLM để tạo ra một "tài liệu giả định" (hypothetical document) trả lời cho câu hỏi của người dùng, sau đó dùng embedding của tài liệu giả này để truy xuất tài liệu thật.
+• Mục đích chính: Cải thiện khả năng truy xuất cho các truy vấn ngắn hoặc mơ hồ bằng cách chuyển đổi không gian tìm kiếm từ "truy vấn - tài liệu" sang "tài liệu (giả) - tài liệu (thật)", giúp tăng độ tương đồng ngữ nghĩa.
+• Các tính năng chính và lợi ích:
+    ◦ Tăng Recall cho truy vấn khó: Xử lý tốt các câu hỏi mà từ khóa không khớp trực tiếp với tài liệu nguồn nhưng có ý nghĩa tương đương.
+    ◦ Không cần huấn luyện lại: Tăng chất lượng dense retrieval mà không cần tinh chỉnh mô hình embedding.
+• Mô tả Sơ đồ kiến trúc: Người dùng gửi truy vấn (Query). Truy vấn này được đưa vào LLM với yêu cầu "hãy viết một câu trả lời giả định". LLM tạo ra tài liệu giả (Hypothetical Doc). Hệ thống sau đó mã hóa (Encode) tài liệu giả này thành vector. Vector này được dùng để Truy xuất (Retrieval) trong kho vector để tìm các tài liệu thật (Real Docs) có nội dung tương tự nhất. Cuối cùng, tài liệu thật được đưa vào LLM để tạo câu trả lời cuối cùng.
+27. Contextual RAG (Parent-Child Chunking) Các mẫu RAG tiêu chuẩn thường gặp vấn đề khi chia nhỏ tài liệu (chunking): đoạn văn quá nhỏ sẽ mất ngữ cảnh, quá lớn sẽ nhiễu. Contextual RAG giải quyết sự đánh đổi này.
+• Định nghĩa: Lưu trữ các đoạn nhỏ (child chunks) để tìm kiếm chính xác, nhưng khi truy xuất thì trả về đoạn lớn hơn bao trùm nó (parent context) hoặc cả cửa sổ văn bản xung quanh.
+• Mục đích chính: Giảm thiểu lỗi do tách đoạn làm mất ngữ cảnh, đảm bảo LLM nhận được thông tin đầy đủ ý nghĩa để trả lời chính xác, đặc biệt trong các tài liệu quy trình hoặc hợp đồng.
+• Các tính năng chính và lợi ích:
+    ◦ Độ chính xác cao (Precision): Tìm kiếm dựa trên đoạn nhỏ giúp khớp chính xác chi tiết cụ thể.
+    ◦ Ngữ cảnh đầy đủ: Cung cấp cho LLM đoạn văn "cha" hoặc các đoạn liền kề để hiểu rõ bối cảnh.
+• Mô tả Sơ đồ kiến trúc: Trong giai đoạn Lập chỉ mục (Indexing), tài liệu được chia thành Đoạn lớn (Parent Chunks) và Đoạn nhỏ (Child Chunks). Chỉ có đoạn nhỏ được tạo embedding để tìm kiếm. Khi có Truy vấn (Query), hệ thống tìm Đoạn nhỏ khớp nhất (Matched Child Chunk). Tuy nhiên, thay vì trả về đoạn nhỏ đó, hệ thống truy xuất ID của đoạn lớn tương ứng và lấy toàn bộ nội dung Đoạn lớn (Parent Context) đưa vào Bộ tạo sinh (Generator) để tạo câu trả lời.
+28. Permission-aware RAG (RAG tích hợp ACL) Khi triển khai RAG trong doanh nghiệp, không phải ai cũng được quyền xem mọi tài liệu. Đây là mẫu kiến trúc bắt buộc cho các hệ thống nội bộ (HR, Tài chính).
+• Định nghĩa: Kiến trúc RAG tích hợp danh sách kiểm soát truy cập (Access Control List - ACL) để lọc kết quả truy xuất dựa trên quyền của người dùng hiện tại,.
+• Mục đích chính: Đảm bảo an toàn dữ liệu và tuân thủ quy định (compliance), ngăn chặn rò rỉ thông tin nhạy cảm qua câu trả lời của AI trong môi trường đa người dùng (multi-tenant).
+• Các tính năng chính và lợi ích:
+    ◦ Chống rò rỉ dữ liệu: Người dùng không thể truy xuất thông tin từ các tài liệu mà họ không có quyền xem.
+    ◦ Lọc theo Metadata: Sử dụng metadata (User Role, Tenant ID) để lọc cứng (hard filter) trong quá trình tìm kiếm vector.
+• Mô tả Sơ đồ kiến trúc: Người dùng gửi Truy vấn (Query) kèm theo Metadata định danh (User ID/Role). Hệ thống thực hiện Truy xuất (Retrieval) nhưng áp dụng một bộ lọc: chỉ tìm trong các chunk có gắn nhãn quyền hạn khớp với User ID/Role (ví dụ: role IN allowed_roles). Các tài liệu đã lọc (Filtered Docs) an toàn mới được đưa vào LLM để tạo phản hồi (Response).
+29. Multimodal RAG Mở rộng khả năng của RAG vượt ra ngoài văn bản thuần túy, cho phép hệ thống "nhìn" và "nghe".
+• Định nghĩa: Hệ thống RAG xử lý các nguồn dữ liệu đa phương thức như hình ảnh, PDF scan, video, âm thanh bằng cách sử dụng các mô hình nhúng đa phương thức (multimodal embeddings) hoặc kỹ thuật OCR/Transcription.
+• Mục đích chính: Khai thác tri thức từ các tài liệu khó như bản vẽ kỹ thuật, biểu đồ trong báo cáo tài chính, slide thuyết trình hoặc video hướng dẫn.
+• Các tính năng chính và lợi ích:
+    ◦ Hỗ trợ tài liệu phi cấu trúc: Xử lý được PDF scan, ảnh chụp và video.
+    ◦ Truy xuất chéo (Cross-modal retrieval): Có thể dùng câu hỏi văn bản để tìm kiếm hình ảnh hoặc đoạn video liên quan.
+• Mô tả Sơ đồ kiến trúc: Dữ liệu đầu vào (Video, Ảnh, PDF scan) đi qua quy trình Xử lý đa phương thức (Multimodal Processing) bao gồm OCR (cho ảnh), Transcription (cho video/audio) và Embedding đa phương thức. Dữ liệu được lưu vào Kho Vector Đa phương thức. Khi người dùng gửi Truy vấn (có thể là text hoặc ảnh), hệ thống tìm kiếm các đoạn (text/image/video frames) liên quan. Các kết quả này được đưa vào một Multimodal LLM (như GPT-4o, Gemini) để tổng hợp và tạo câu trả lời.
+Phần VII: Các Mẫu Tối Ưu Hóa & Chiến Lược Dữ Liệu (Optimization & Data Strategies)
+Các mẫu này giải quyết các vấn đề thực tế khi đưa RAG vào sản xuất (production) như: chi phí, độ trễ, và xử lý các loại từ khóa đặc thù mà Vector thuần túy thường bỏ sót.
+30. Hybrid RAG (Keyword + Vector) Đây là tiêu chuẩn vàng cho các hệ thống RAG trong doanh nghiệp hiện nay, khắc phục điểm yếu của Vector Search.
+• Định nghĩa: Kết hợp tìm kiếm từ khóa truyền thống (Lexical/BM25) với tìm kiếm ngữ nghĩa (Vector Similarity), sau đó hợp nhất kết quả bằng các thuật toán xếp hạng (như Reciprocal Rank Fusion),.
+• Mục đích chính: Giải quyết tình trạng Vector Search hay bỏ sót các từ khóa chính xác nhưng hiếm gặp (như mã lỗi 'ERR_429', mã sản phẩm 'SKU-123', tên riêng) mà tìm kiếm từ khóa xử lý rất tốt.
+• Các tính năng chính và lợi ích:
+    ◦ Recall tốt hơn: Bắt được cả ngữ cảnh (nhờ Vector) và từ khóa chính xác (nhờ Keyword).
+    ◦ Ổn định hơn: Giảm thiểu các trường hợp "ảo giác" khi Embedding Model không hiểu các thuật ngữ chuyên ngành hoặc mã số lạ.
+• Mô tả Sơ đồ kiến trúc: Người dùng gửi Truy vấn (Query). Hệ thống tách làm hai luồng song song: (1) Lexical Search (BM25) tìm kiếm từ khóa chính xác, và (2) Vector Search tìm kiếm ngữ nghĩa. Hai danh sách kết quả này được đưa vào bộ Fusion & Deduplication (Hợp nhất và Khử trùng lặp). Danh sách hợp nhất cuối cùng mới được đưa vào LLM để tạo câu trả lời.
+31. Reranking RAG (Cross-Encoder) Trong danh sách gốc có nhắc đến "xếp hạng lại" trong Speculative RAG, nhưng Reranking là một kiến trúc độc lập phổ biến để tăng độ chính xác (Precision) cực đại ở bước cuối cùng.
+• Định nghĩa: Sau khi truy xuất một lượng lớn tài liệu (top-k ban đầu, ví dụ: 50 đoạn), sử dụng một mô hình chuyên biệt (Cross-Encoder hoặc LLM Reranker) để chấm điểm lại mức độ liên quan và chỉ lấy ít đoạn tốt nhất (ví dụ: top-5) đưa vào prompt.
+• Mục đích chính: Tăng độ chính xác (Precision) và loại bỏ nhiễu. Các mô hình Vector (Bi-encoder) tìm kiếm nhanh nhưng kém chính xác; Reranker chậm hơn nhưng "đọc hiểu" kỹ hơn sự khớp nhau giữa câu hỏi và tài liệu.
+• Các tính năng chính và lợi ích:
+    ◦ Tăng chất lượng Context: Đảm bảo LLM chỉ nhận được những đoạn thông tin tinh túy nhất, giảm thiểu việc bị rối do nhiễu.
+    ◦ Cân bằng Tốc độ/Chính xác: Dùng Vector để lọc thô nhanh, dùng Reranker để lọc tinh kỹ.
+• Mô tả Sơ đồ kiến trúc: Truy vấn đi qua Retriever để lấy về tập kết quả rộng (Top-50 candidates). Toàn bộ 50 đoạn này cùng với câu hỏi được đưa qua Mô hình Reranker (Cross-Encoder). Mô hình này chấm điểm từng cặp (Câu hỏi - Đoạn văn). Hệ thống sắp xếp lại (Sort) theo điểm số mới và cắt lấy Top-5 tốt nhất để gửi sang Generator (LLM).
+32. Semantic Cache RAG (Embedding Cache) Đây là mẫu tối ưu hóa chi phí và tốc độ cực kỳ quan trọng cho các hệ thống có lưu lượng truy cập cao hoặc câu hỏi lặp lại.
+• Định nghĩa: Cache câu trả lời dựa trên độ tương đồng ngữ nghĩa (vector similarity) thay vì khớp từ khóa chính xác. Nếu câu hỏi mới có ý nghĩa gần giống câu hỏi đã cache, hệ thống trả về ngay lập tức.
+• Mục đích chính: Giảm chi phí gọi LLM và giảm độ trễ (latency) xuống mức mili-giây cho các câu hỏi phổ biến hoặc lặp lại (FAQ, Support).
+• Các tính năng chính và lợi ích:
+    ◦ Tiết kiệm chi phí: Không cần gọi LLM đắt tiền cho những vấn đề đã biết.
+    ◦ Phản hồi tức thì: Bỏ qua toàn bộ quy trình Retrieval và Generation.
+• Mô tả Sơ đồ kiến trúc: Truy vấn mới được tạo Embedding. Hệ thống tìm kiếm vector này trong Semantic Cache Store (chứa các cặp câu hỏi-câu trả lời cũ). Nếu độ tương đồng > ngưỡng (ví dụ: 0.95), hệ thống trả về Cached Answer ngay lập tức (Hit). Nếu không (Miss), hệ thống chạy quy trình Standard RAG bình thường, sau đó lưu cặp (Câu hỏi mới - Câu trả lời mới) vào Cache để dùng cho lần sau.
+33. Hierarchical Retrieval (RAG Phân cấp / Doc-to-Chunk) Khác với RAPTOR (gom nhóm theo cụm ngữ nghĩa) hay Contextual RAG (Parent-Child), mẫu này dựa trên cấu trúc vật lý của tài liệu.
+• Định nghĩa: Quy trình truy xuất diễn ra theo tầng: Đầu tiên tìm Tài liệu (Document) liên quan, sau đó tìm Mục (Section) trong tài liệu đó, và cuối cùng mới lấy Đoạn (Chunk) cụ thể.
+• Mục đích chính: Giảm nhiễu (noise) khi xử lý các tài liệu rất dài (như sách hướng dẫn, văn bản luật). Tránh việc lấy các đoạn văn có từ khóa khớp nhưng thuộc về một tài liệu hoặc ngữ cảnh sai lệch hoàn toàn.
+• Các tính năng chính và lợi ích:
+    ◦ Tăng độ chính xác ngữ cảnh: Đảm bảo đoạn văn được chọn nằm trong đúng phạm vi tài liệu lớn phù hợp.
+    ◦ Trải nghiệm người dùng tốt hơn: Có thể trích dẫn nguồn theo cấp độ: Tên tài liệu -> Chương -> Đoạn.
+• Mô tả Sơ đồ kiến trúc: Dữ liệu được Index ở nhiều cấp độ (Tóm tắt tài liệu, Tóm tắt chương, Nội dung chi tiết). Khi có Truy vấn, hệ thống thực hiện Lọc cấp 1 (Document Level) để chọn top các tài liệu tiềm năng. Sau đó thực hiện Lọc cấp 2 (Section Level) trong các tài liệu đó. Cuối cùng thực hiện Truy xuất chi tiết (Chunk Level) để lấy đoạn văn chính xác nhất đưa vào LLM.
+
+Kết luận: Tương lai của RAG
+Chúng ta đã đi qua một hành trình từ các mẫu RAG Nền tảng, những khối xây dựng cơ bản, đến các kiến trúc Nâng cao, Tối ưu hóa, Chuyên biệt và Theo Lĩnh vực cụ thể. Rõ ràng, RAG không còn là một khái niệm đơn lẻ mà là một hệ sinh thái đa dạng gồm các kiến trúc mạnh mẽ.
+Hành trình khám phá 33 mẫu thiết kế này chỉ là điểm khởi đầu. Vũ trụ RAG đang liên tục mở rộng, và bằng cách nắm vững những kiến trúc này, bạn không chỉ đang học một công nghệ—bạn đang trang bị cho mình bộ công cụ để xây dựng tương lai của AI tương tác. Hãy bắt đầu thử nghiệm, kết hợp và kiến tạo.
+

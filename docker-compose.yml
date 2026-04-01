@@ -1,0 +1,350 @@
+# ==============================================================================
+# THEDOCAI - TRỢ LÝ TRI THỨC THÔNG MINH
+# ==============================================================================
+# Full stack deployment with:
+# - React Frontend (TheDocAI-Web)
+# - FastAPI Backend (OCR, RAG, Multi-provider AI)
+# - PostgreSQL + pgvector (Vector database)
+# - Redis (Queue & Cache)
+# - Celery Worker (Background jobs)
+# - MinIO (Optional - S3-compatible object storage)
+# ==============================================================================
+
+services:
+  # ==============================================================================
+  # THEDOCAI FRONTEND (React + Vite + Nginx)
+  # ==============================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: thedocai-frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # THEDOCAI BACKEND SERVICE (FastAPI)
+  # ==============================================================================
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: thedocai-backend
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HOST=0.0.0.0
+      - PORT=8000
+      - APP_ENV=${APP_ENV:-prod}
+      # Database connection (internal Docker network)
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DATABASE=thedocai
+      # Redis connection (internal Docker network)
+      - REDIS_URL=redis://redis:6379/0
+      # Ollama connection (host machine)
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
+      # MinIO/S3 Object Storage
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=rag-documents
+      - MINIO_SECURE=false
+      - MINIO_EXTERNAL_ENDPOINT=localhost:9000
+    env_file:
+      - ./server/.env
+    volumes:
+      - ./server:/app              # Dev mode: mount code for hot reload
+      - backend-storage:/app/storage
+      - backend-logs:/app/logs
+      - huggingface-cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # POSTGRESQL + PGVECTOR DATABASE
+  # ==============================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: thedocai-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=thedocai
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # REDIS (Queue & Cache)
+  # ==============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: thedocai-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # CELERY WORKER - OCR (Heavy background jobs)
+  # ==============================================================================
+  celery-worker-ocr:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: thedocai-celery-ocr
+    command: ["celery", "-A", "app.queue.celery_app", "worker", "-Q", "ocr,convert", "-l", "info", "--concurrency", "1"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
+      # Surya Performance Optimizations
+      - IMAGE_DPI=144
+      - IMAGE_DPI_HIGHRES=144
+      - USE_SURYA_FOR_PDF=false
+      - COMPILE_ALL=false
+      - RECOGNITION_BATCH_SIZE=4
+      - DETECTOR_BATCH_SIZE=2
+      - LAYOUT_BATCH_SIZE=2
+      - TABLE_REC_BATCH_SIZE=4
+      # MinIO/S3 Object Storage
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=rag-documents
+      - MINIO_SECURE=false
+    env_file:
+      - ./server/.env
+    volumes:
+      - ./server:/app              # Dev mode: mount code for hot reload
+      - backend-storage:/app/storage
+      - backend-logs:/app/logs
+      - huggingface-cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # CELERY WORKER - INDEX (Lightweight background jobs)
+  # ==============================================================================
+  celery-worker-index:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: thedocai-celery-index
+    command: ["celery", "-A", "app.queue.celery_app", "worker", "-Q", "index,default", "-l", "info", "--concurrency", "4"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
+      # MinIO/S3 Object Storage
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=rag-documents
+      - MINIO_SECURE=false
+    env_file:
+      - ./server/.env
+    volumes:
+      - ./server:/app              # Dev mode: mount code for hot reload
+      - backend-storage:/app/storage
+      - backend-logs:/app/logs
+      - huggingface-cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # CELERY WORKER - ENRICHMENT (RAG-Anything Knowledge Graph, async)
+  # ==============================================================================
+  celery-worker-enrichment:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: thedocai-celery-enrichment
+    command: ["celery", "-A", "app.queue.celery_app", "worker", "-Q", "enrichment", "-l", "info", "--concurrency", "1"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
+      # MinIO/S3 Object Storage
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=rag-documents
+      - MINIO_SECURE=false
+    env_file:
+      - ./server/.env
+    volumes:
+      - ./server:/app              # Dev mode: mount code for hot reload
+      - backend-storage:/app/storage
+      - backend-logs:/app/logs
+      - huggingface-cache:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # CELERY BEAT (Scheduled Tasks) - Optional
+  # ==============================================================================
+  # celery-beat:
+  #   build:
+  #     context: ./server
+  #     dockerfile: Dockerfile
+  #   container_name: thedocai-celery-beat
+  #   command: celery -A app.queue.celery_app beat --loglevel=info
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #     - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
+  #     - REDIS_URL=redis://redis:6379/0
+  #   env_file:
+  #     - ./server/.env
+  #   depends_on:
+  #     - redis
+  #   restart: unless-stopped
+  #   networks:
+  #     - rag-network
+
+  # ==============================================================================
+  # MINIO (S3-Compatible Object Storage)
+  # ==============================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: thedocai-minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"   # S3 API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # Web Console
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag-network
+
+  # ==============================================================================
+  # FLOWER (Celery Monitoring) - Optional
+  # ==============================================================================
+  # Uncomment to enable Celery task monitoring
+  # flower:
+  #   build:
+  #     context: ./server
+  #     dockerfile: Dockerfile
+  #   container_name: thedocai-flower
+  #   command: celery -A app.queue.celery_app flower --port=5555
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #   ports:
+  #     - "5555:5555"
+  #   depends_on:
+  #     - redis
+  #     - celery-worker-ocr
+  #   restart: unless-stopped
+  #   networks:
+  #     - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
+
+volumes:
+  backend-storage:
+    driver: local
+  backend-logs:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  minio-data:
+    driver: local
+  huggingface-cache:
+    driver: local

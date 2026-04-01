@@ -1,0 +1,225 @@
+@startuml memori_workflow
+!theme plain
+title Memori + Memory System Workflow (Cognee-Enhanced)
+skinparam backgroundColor #FFFFFF
+
+|#LightCyan|Memory Layer|
+
+start
+:New User Message;
+
+partition "Cache Check (2-5ms)" #E0F7FA {
+  :MemoryCacheManager.get_memory;
+  :MemoryCacheManager.get_memori;
+  
+  if (Both cached?) then (yes)
+    :Return cached contexts;
+    note right: **Ultra-fast path**
+    stop
+  endif
+}
+
+partition "Parallel Execution (100-300ms)" #E3F2FD {
+  :ParallelMemoryExecutor.execute_memory_recall;
+  
+  fork
+    |#LightGreen|Short-term Memory|
+    :MemoryManager.get_memory;
+    note right
+      **ConversationMemory**
+      - Recent messages
+      - Session context
+      - Temporary state
+    end note
+    
+    :MemoryManager.get_summary;
+    note right
+      **Long-term Summary**
+      - Periodic summarization
+      - Key topics
+      - Important entities
+    end note
+  fork again
+    |#LightPink|Memori (Fact Store)|
+    :MemoriManager.recall_for_query;
+    note right
+      **Semantic Recall**
+      - User preferences
+      - Stated facts
+      - Personal attributes
+    end note
+    
+    :Query embedding → fact search;
+    :Rank by relevance;
+  fork again
+    |#LightBlue|Graph Search (NEW)|
+    :GraphSearchService.search;
+    note right
+      **5 Search Types:**
+      - AUTO (intelligent)
+      - VECTOR (semantic)
+      - TRIPLET (S-P-O)
+      - GRAPH_TRAVERSAL
+      - COMBINED
+    end note
+    
+    :Search knowledge graph;
+    :Format for prompt;
+  end fork
+}
+
+|#LightYellow|Context Building|
+
+partition "Combine All Contexts" #FFFDE7 {
+  :Merge memory + memori + graph;
+  note right
+    **Format:**
+    [Conversation Context]
+    {memory_context}
+    
+    [Known Facts]
+    {memori_context}
+    
+    [Knowledge Graph Context]
+    {graph_context}
+  end note
+}
+
+partition "Cache Update" #FFF3E0 {
+  :MemoryCacheManager.set_memory;
+  :MemoryCacheManager.set_memori;
+}
+
+:Return combined context;
+:RAG Service → LLM Generation;
+:Save Response;
+
+== Post-Response: Auto-Cognify (NEW) ==
+
+|#LightGray|Background Processing|
+
+partition "Auto-Cognify (Async, Non-blocking)" #E8F5E9 {
+  :AutoCognifyService.cognify_message;
+  note right
+    **Triggered for:**
+    - User message
+    - Assistant response
+  end note
+  
+  fork
+    :LLM-based fact extraction;
+    note right
+      Ask LLM to extract:
+      - Key facts
+      - Entities
+      - Relationships
+    end note
+  fork again
+    :Rule-based extraction;
+    note right
+      Fallback patterns:
+      - "tôi là..." → identity
+      - "tôi thích..." → preference
+      - "tôi làm..." → work
+    end note
+  end fork
+  
+  :Score fact importance;
+  note right
+    **Importance Scoring:**
+    - Name/age → 8.5
+    - Preferences → 6.5
+    - General → 5.0
+  end note
+  
+  :MemoriManager.add_facts;
+  :Extract semantic triples;
+}
+
+== Celery Background Task ==
+
+partition "Memori Extraction (Legacy)" #ECEFF1 {
+  :Check: Every 2 messages;
+  
+  if (Should extract?) then (yes)
+    :Queue Celery task;
+    note right
+      **extract_memori_facts_task**
+      Non-blocking background job
+    end note
+    
+    :MemoriManager.extract_and_store;
+    
+    partition "Extraction Types" #E8EAF6 {
+      :Extract facts;
+      :Extract preferences;
+      :Extract attributes;
+    }
+    
+    :Store in database;
+  else (no)
+    :Skip extraction;
+  endif
+}
+
+== Periodic Enrichment: Memify (NEW) ==
+
+|#Lavender|Knowledge Enrichment|
+
+partition "MemifyService (Scheduled)" #F3E5F5 {
+  :MemifyService.memify;
+  note right
+    **Runs periodically (e.g., daily)**
+    Enriches knowledge graph
+  end note
+  
+  partition "Inference" #EDE7F6 {
+    :Infer transitive relationships;
+    note right
+      A→B, B→C ⟹ A→C
+    end note
+    
+    :Infer inverse relationships;
+    note right
+      works_at → employs
+      teaches → taught_by
+    end note
+  }
+  
+  partition "Summarization" #E1BEE7 {
+    :Cluster related facts;
+    :Generate summary facts;
+    note right
+      5+ work facts →
+      "[Summary] User is a software engineer..."
+    end note
+  }
+  
+  partition "Entity Merge" #CE93D8 {
+    :Detect duplicate entities;
+    :Merge facts to main entity;
+  }
+}
+
+stop
+
+legend right
+  **Memory Types**
+  |= Type |= Scope |= Duration |
+  | MemoryManager | Conversation | Session |
+  | Memori Facts | User | Permanent |
+  | Graph Search | Workspace | Permanent |
+  
+  **New Cognee-Inspired Services**
+  |= Service |= Trigger |= Purpose |
+  | AutoCognifyService | Every message | Extract facts |
+  | GraphSearchService | Every query | Search KG |
+  | MemifyService | Scheduled | Enrich KG |
+  
+  **Parallel Tasks (3)**
+  1. Memory (short-term)
+  2. Memori (long-term facts)
+  3. Graph (knowledge graph)
+endlegend
+
+@enduml

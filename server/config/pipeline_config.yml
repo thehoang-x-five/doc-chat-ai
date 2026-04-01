@@ -1,0 +1,211 @@
+# Production AI Pipeline Configuration
+# This file controls which stages are enabled in the pipeline
+
+# Service Information
+service:
+  name: "rag-anything"
+  version: "2.0.0"
+  environment: "production"  # development, staging, production
+
+# Pre-LLM Pipeline Configuration
+pre_llm:
+  # Input Validation
+  validation:
+    enabled: true
+    check_sql_injection: true
+    check_prompt_injection: true
+    detect_pii: true
+    mask_pii: true
+  
+  # Guardrails (Input)
+  input_guardrails:
+    enabled: true
+    config_path: "server/config/guardrails_config.yml"
+    hot_reload: true
+  
+  # Intent Detection
+  intent_detection:
+    enabled: true
+    use_cache: true
+    cache_ttl_seconds: 3600
+    llm_fallback: true
+  
+  # Text Processing
+  text_processing:
+    enabled: true
+    spell_check: false  # Requires SymSpell library
+    query_expansion: true
+    max_synonyms: 3
+    preserve_technical_terms: true
+  
+  # Memory Management
+  memory:
+    enabled: true
+    use_ner: false  # Requires spaCy library
+    semantic_deduplication: true
+    similarity_threshold: 0.9
+    llm_fact_scoring: true
+
+# RAG Pattern Selection
+rag_patterns:
+  # Default pattern to use
+  default_pattern: "adaptive"  # standard, adaptive, corrective, self, corag
+  
+  # Adaptive RAG Configuration
+  adaptive:
+    enabled: true
+    high_confidence_threshold: 0.8
+    low_confidence_threshold: 0.6
+    lightweight_top_k: 3
+    full_top_k: 10
+  
+  # Corrective RAG Configuration
+  corrective:
+    enabled: true
+    relevance_threshold: 0.6
+    max_correction_attempts: 2
+    web_search_fallback: false  # Requires web search API
+  
+  # Self RAG Configuration
+  self_rag:
+    enabled: true
+    max_iterations: 3
+    min_relevance_score: 0.6
+    min_grounding_score: 0.5
+  
+  # CORAG Configuration
+  corag:
+    enabled: true
+    cost_weight: 0.3
+    quality_alert_threshold: 0.7
+    use_mcts: true
+    mcts_iterations: 100
+  
+  # Standard Hybrid RAG (always available)
+  hybrid:
+    enabled: true
+    use_graph: true
+    use_vector: true
+    use_bm25: true
+    fusion_method: "rrf"  # Reciprocal Rank Fusion
+
+# Post-LLM Pipeline Configuration
+post_llm:
+  # Grounding Verification
+  grounding:
+    enabled: true
+    use_semantic_similarity: true
+    use_entailment: false  # Requires NLI model
+    token_overlap_weight: 0.4
+    semantic_weight: 0.3
+    entailment_weight: 0.3
+    min_score_threshold: 0.5
+  
+  # Output Guardrails
+  output_guardrails:
+    enabled: true
+    check_toxicity: true
+    check_bias: true
+    check_factuality: true
+    check_pii_leakage: true
+  
+  # Policy Service
+  policy:
+    enabled: true
+    default_mode: "balanced"  # strict, balanced, open
+    use_dynamic_thresholds: true
+    enable_ab_testing: false
+  
+  # Response Formatting
+  formatting:
+    enabled: true
+    enable_streaming: true
+    stream_chunk_interval_ms: 100
+    format_citations: true
+    enable_table_export: true
+  
+  # Real-time Evaluation
+  evaluation:
+    enabled: true
+    sample_rate: 0.1  # 10% of requests
+    alert_on_degradation: true
+    faithfulness_threshold: 0.7
+    relevancy_threshold: 0.6
+
+# Observability Configuration
+observability:
+  # Phoenix Tracing
+  tracing:
+    enabled: true
+    sampling_rate: 0.1  # 10% of requests
+    export_format: "json"  # json, otlp
+  
+  # Logging
+  logging:
+    enabled: true
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    format: "json"  # json, text
+    enable_sampling: true
+    sampling_rate: 0.1
+    high_volume_threshold: 1000  # logs per minute
+    performance_threshold_ms: 5000
+  
+  # Metrics
+  metrics:
+    enabled: true
+    export_prometheus: true
+    prometheus_port: 9090
+
+# Performance Configuration
+performance:
+  # Token Budget
+  token_budget:
+    max_context_tokens: 4000
+    max_response_tokens: 1000
+  
+  # Timeouts
+  timeouts:
+    validation_timeout_ms: 1000
+    retrieval_timeout_ms: 5000
+    generation_timeout_ms: 30000
+    total_pipeline_timeout_ms: 60000
+  
+  # Caching
+  caching:
+    intent_cache_enabled: true
+    rag_cache_enabled: true
+    search_cache_enabled: true
+    cache_ttl_seconds: 3600
+
+# Feature Flags
+features:
+  # Experimental features
+  semantic_chunking: false  # Requires Chonkie library
+  deepeval_testing: false  # Requires DeepEval library
+  
+  # Beta features
+  multi_query_rag: false
+  rag_fusion: false
+  
+  # Deprecated features (will be removed)
+  legacy_validation: false
+
+# Notifications
+notifications:
+  # Webhook for alerts
+  webhook_url: null  # Set to your webhook URL
+  
+  # Alert types to send
+  alerts:
+    performance_degradation: true
+    quality_degradation: true
+    error_rate_spike: true
+    cost_spike: true
+    threshold_changes: true
+
+# Development/Debug Settings
+debug:
+  enabled: false
+  verbose_logging: false
+  save_intermediate_results: false
+  disable_caching: false

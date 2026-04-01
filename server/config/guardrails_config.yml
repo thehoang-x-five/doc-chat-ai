@@ -1,0 +1,182 @@
+# NeMo Guardrails Configuration
+# This configuration defines input and output rails for safety checks
+
+# Input Rails - Check user input before processing
+input_rails:
+  # Jailbreak Detection
+  - name: jailbreak_detection
+    enabled: true
+    description: "Detect attempts to bypass system instructions"
+    patterns:
+      - "ignore previous instructions"
+      - "ignore all previous"
+      - "disregard previous"
+      - "forget everything"
+      - "you are now"
+      - "new instructions"
+      - "system:"
+      - "admin:"
+      - "override:"
+      - "sudo"
+      - "act as"
+      - "pretend you are"
+      - "roleplay as"
+    action: block  # block, sanitize, warn
+    severity: high
+  
+  # PII Filter
+  - name: pii_filter
+    enabled: true
+    description: "Detect and mask personally identifiable information"
+    types:
+      - email
+      - phone
+      - ssn
+      - credit_card
+      - passport
+      - driver_license
+    action: sanitize  # Mask PII before processing
+    severity: high
+  
+  # Topic Restriction
+  - name: topic_restriction
+    enabled: true
+    description: "Block queries on restricted topics"
+    blocked_topics:
+      - illegal_activities
+      - harmful_content
+      - adult_content
+      - violence
+      - hate_speech
+      - self_harm
+      - dangerous_instructions
+    action: block
+    severity: high
+  
+  # Prompt Injection Detection
+  - name: prompt_injection
+    enabled: true
+    description: "Detect prompt injection attempts"
+    patterns:
+      - "\\n\\nSystem:"
+      - "\\n\\nAssistant:"
+      - "\\n\\nHuman:"
+      - "<|im_start|>"
+      - "<|im_end|>"
+      - "###Instruction:"
+      - "###Response:"
+    action: block
+    severity: critical
+  
+  # SQL Injection Detection
+  - name: sql_injection
+    enabled: true
+    description: "Detect SQL injection attempts"
+    patterns:
+      - "(?i)\\bUNION\\b.*\\bSELECT\\b"
+      - "(?i)\\bDROP\\b.*\\bTABLE\\b"
+      - "(?i)\\bINSERT\\b.*\\bINTO\\b"
+      - "(?i)\\bDELETE\\b.*\\bFROM\\b"
+      - "(?i)\\bUPDATE\\b.*\\bSET\\b"
+      - "(?i)--"
+      - "(?i)/\\*.*\\*/"
+    action: block
+    severity: critical
+
+# Output Rails - Check LLM output before returning to user
+output_rails:
+  # Toxicity Check
+  - name: toxicity_check
+    enabled: true
+    description: "Detect toxic or offensive content in responses"
+    threshold: 0.7  # 0-1, higher = more strict
+    categories:
+      - toxicity
+      - severe_toxicity
+      - obscene
+      - threat
+      - insult
+      - identity_attack
+    action: block
+    severity: high
+  
+  # Bias Check
+  - name: bias_check
+    enabled: true
+    description: "Detect biased content in responses"
+    categories:
+      - gender
+      - race
+      - religion
+      - nationality
+      - age
+      - disability
+    threshold: 0.6
+    action: warn  # Log warning but allow
+    severity: medium
+  
+  # Factuality Check
+  - name: factuality_check
+    enabled: true
+    description: "Verify response is grounded in context"
+    min_grounding_score: 0.5
+    action: block  # Block if grounding score too low
+    severity: high
+  
+  # PII Leakage Prevention
+  - name: pii_leakage
+    enabled: true
+    description: "Prevent leaking PII in responses"
+    types:
+      - email
+      - phone
+      - ssn
+      - credit_card
+      - api_key
+      - password
+    action: sanitize
+    severity: critical
+  
+  # Hallucination Detection
+  - name: hallucination_detection
+    enabled: true
+    description: "Detect hallucinated information"
+    min_confidence: 0.6
+    action: warn
+    severity: medium
+
+# General Settings
+settings:
+  # Enable/disable all guardrails
+  enabled: true
+  
+  # Logging
+  log_violations: true
+  log_level: INFO
+  
+  # Performance
+  cache_results: true
+  cache_ttl: 3600  # seconds
+  
+  # Error handling
+  fail_open: false  # If true, allow on guardrail error; if false, block
+  
+  # Rate limiting
+  max_checks_per_minute: 1000
+  
+  # User-friendly error messages
+  error_messages:
+    jailbreak: "Your request contains content that violates our usage policy. Please rephrase your question."
+    pii: "Your request contains sensitive information. Please remove personal details and try again."
+    topic_restriction: "I cannot assist with this topic. Please ask about something else."
+    prompt_injection: "Your request contains invalid formatting. Please rephrase your question."
+    sql_injection: "Your request contains invalid characters. Please rephrase your question."
+    toxicity: "I cannot provide a response to this request. Please rephrase your question."
+    factuality: "I don't have enough information to answer this question accurately."
+    default: "I cannot process this request. Please try rephrasing your question."
+
+# Hot-reload settings
+hot_reload:
+  enabled: true
+  watch_interval: 60  # seconds
+  auto_reload: true

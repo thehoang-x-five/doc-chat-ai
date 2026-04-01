@@ -1,0 +1,111 @@
+@startuml analysis_findings
+!theme plain
+title Phân Tích Hệ Thống & Kết Quả Fix — 2026-02-22
+
+note as FixSummary #90EE90
+  **=7 VẤN ĐỀ ĐÃ FIX**
+  
+  **🔴 Bug 1-3: hybrid.py — Prompt Construction**
+  - ✅ Memory/Memori/Graph context **injected** vào system prompt
+  - ✅ Conversation history **injected** vào messages array
+  - ✅ Vietnamese PromptBuilder thay hardcoded English
+  
+  **🟠 Issue 4: service.py — Duplicate Fallback**
+  - ✅ Xóa code duplicate: query chỉ chạy **1 lần** thay vì 2
+  
+  **🟠 Issue 5: stream_manager.py — Security Order**
+  - ✅ Guardrails chạy **TRƯỚC** Intent Detection
+  - ✅ GREETING/CHITCHAT không bypass bảo mật
+  
+  **🟠 Issue 6: stream_manager.py — FC Timeout**
+  - ✅ Function Calling timeout: 100ms → **300ms**
+  
+  **🟠 Issue 7: stream_manager.py — Unused Services**
+  - ✅ SafetyChecker PII redaction **tích hợp** vào guardrails flow
+end note
+
+note as FilesChanged #FFD700
+  **=FILES ĐÃ SỬA ĐỔI**
+  
+  **hybrid.py** (rewrite hoàn toàn)
+  ├── _build_system_prompt() — PromptBuilder + memory
+  ├── _build_messages() — history injection
+  └── query_stream() — integrated prompt construction
+  
+  **service.py** (dòng 295-338)
+  └── Xóa duplicate simulated streaming block
+  
+  **stream_manager.py** (dòng 228-360)
+  ├── Đổi thứ tự: Guardrails → Intent (was Intent → Guardrails)
+  ├── Thêm SafetyChecker PII redaction block
+  └── FC timeout 0.1 → 0.3
+end note
+
+note as UMLUpdated #87CEEB
+  **=UML FILES ĐÃ CẬP NHẬT**
+  
+  - **chat_workflow.puml** — Flow mới với ② Guardrails → ②b PII → ③ Intent
+  - **analysis.md** — Bản phân tích chi tiết + kết quả fix
+  - **analysis_findings.puml** — (file này)
+  
+  **Không đổi:**
+  - system_architecture.puml (kiến trúc tổng thể vẫn đúng)
+  - rag_orchestration.puml (RAG flow bên trong vẫn đúng)
+  - memori_workflow.puml (✅ chính xác)
+  - search_workflow.puml (✅ chính xác)
+  - server_file_tree.puml (✅ chính xác)
+end note
+
+note as RemainingWork #FFB6C1
+  **=CÔNG VIỆC CÒN LẠI (NẾU CẦN)**
+  
+  **P2 — Performance:**
+  - [ ] Thêm RAGCacheService vào StreamManager
+  - [ ] Cache graph_context
+  
+  **P3 — Code Quality:**
+  - [ ] Refactor duplicated message-saving logic
+  - [ ] Tạo UML cho OCR flow
+  - [ ] Tạo UML cho document indexing flow
+  - [ ] Tích hợp ConfidenceScorer vào quality pipeline
+  - [ ] Tích hợp FactChecker vào post-stream check
+  
+  **Quality Services Status:**
+  |= Service |= Status |
+  | GuardrailsService | ✅ Active (input + output) |
+  | SafetyChecker | ✅ **NOW Active** (PII redaction) |
+  | HallucinationChecker | ✅ Active (post-stream) |
+  | GroundingVerifier | ✅ Active (post-stream) |
+  | ConfidenceScorer | ⬜ Not integrated |
+  | FactChecker | ⬜ Not integrated |
+  | ResultValidator | ⬜ Not integrated |
+  | EvaluationService | ⬜ Not integrated |
+  | TimelineService | ⬜ Not integrated |
+  | RAGCacheService | ⬜ Not integrated |
+  | SearchCache | ⬜ Not integrated |
+end note
+
+note as Pipeline #E8F5E9
+  **=PIPELINE HIỆN TẠI (FIXED)**
+  
+  ① Dedup Cache (Redis)
+  ② Input Guardrails ← **TRƯỚC Intent**
+  ②b PII Redaction ← **MỚI**
+  ③ Intent Detection
+  ④ Function Calling (300ms timeout)
+  ⑤ Image Generation
+  ⑥ Memory Recall (parallel)
+  ⑦ RAG Stream + **PromptBuilder**
+  │  ├── memory_context ← **INJECTED**
+  │  ├── conversation_history ← **INJECTED**
+  │  └── Vietnamese system prompt ← **VIA PromptBuilder**
+  ⑧ Post-Stream Quality
+  ⑨ Save + Background
+end note
+
+FixSummary -[hidden]-> FilesChanged
+FilesChanged -[hidden]-> UMLUpdated
+UMLUpdated -[hidden]-> RemainingWork
+RemainingWork -[hidden]-> Pipeline
+
+@enduml

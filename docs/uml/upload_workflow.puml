@@ -1,0 +1,284 @@
+@startuml
+title OCR + RAG Ingestion Workflow (Docling + Surya + RAG-Anything)
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontSize 12
+skinparam ArrowThickness 1.2
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #999999
+}
+skinparam activity {
+  BorderColor #666666
+  BackgroundColor #F7F7F7
+  DiamondBackgroundColor #FFF8DC
+  DiamondBorderColor #666666
+  StartColor #5C9EAD
+  EndColor #D1495B
+  BarColor #666666
+}
+
+start
+
+partition "Frontend (React)" {
+  :User uploads file;
+  :Send multipart/form-data to FastAPI;
+}
+
+partition "FastAPI API" {
+  :Validate MIME / size / checksum;
+  note right
+    Mục tiêu:
+    - chặn file lỗi từ đầu
+    - tính checksum để chống upload trùng
+    - quyết định idempotency key
+
+    Code anh nên tự có:
+    - upload endpoint
+    - file validator
+    - checksum util
+  end note
+
+  if (Valid file?) then (Yes)
+    :Upload original file to MinIO;
+    :Create Document;
+    :Create DocumentVersion\nstatus = UPLOADED;
+    :Create OCRJob\nstatus = QUEUED;
+    :Commit transaction;
+    :Enqueue OCR task;
+    :Return {document_id, version_id,\nstatus = OCR_QUEUED};
+    note right
+      Lưu ý:
+      enqueue nên đứng sau commit.
+      Không nên return trước enqueue.
+    end note
+  else (No)
+    :Return upload error;
+    stop
+  endif
+}
+
+partition "OCR Worker" {
+  :Receive OCR task;
+  :Load DocumentVersion + OCRJob metadata;
+  if (Cancelled / deleted?) then (Yes)
+    :Mark OCRJob = CANCELLED;
+    stop
+  else (No)
+    :Download original file from MinIO;
+    :Detect file type + native text availability;
+  endif
+  note right
+    Đây là bước router đầu tiên.
+    Không nên chỉ nhìn extension.
+    Với PDF nên xét:
+    - có text layer không
+    - coverage text có đủ tốt không
+    - page nào scan / page nào native
+  end note
+}
+
+partition "Parser Router" {
+  if (Image or scanned PDF?) then (Yes)
+    :Use Surya OCR;
+    :Extract OCR text + layout + reading order;
+    :Extract table / formula signals if needed;
+    :Build page blocks with bbox + confidence + labels;
+    note right
+      Đọc source Surya tại:
+      - surya/recognition
+      - surya/detection
+      - surya/layout
+      - surya/table_rec
+      - surya/settings.py
+
+      CLI/examples ở repo root:
+      - ocr_text.py
+      - detect_text.py
+      - detect_layout.py
+      - table_recognition.py
+    end note
+
+  else (No)
+    if (Digital PDF / DOCX / PPTX / XLSX / HTML?) then (Yes)
+      :Use Docling;
+      :Convert to DoclingDocument;
+      :Extract Markdown + structured JSON;
+
+      note right
+        Đọc source Docling tại:
+        - docling/document_converter.py
+        - docling/pipeline
+        - docling/datamodel
+        - docling/backend
+        - docling/chunking
+
+        Điểm vào đơn giản nhất:
+        DocumentConverter.convert(...)
+      end note
+
+      if (Embedded image regions\nor OCR-only pages?) then (Yes)
+        :Crop image regions / pages;
+        :Run Surya Sub-OCR;
+        :Merge OCR text back into blocks;
+        note right
+          Chỉ OCR bổ sung cho:
+          - ảnh embedded có text
+          - page scan trong mixed PDF
+          - vùng bảng/hình chưa có text layer tốt
+
+          Tránh OCR lại toàn bộ nếu Docling
+          đã extract native text ổn.
+        end note
+      else (No)
+      endif
+
+    else (TXT / MD / CSV / JSON)
+      :Direct text extraction;
+      note right
+        Nhóm này không cần OCR.
+        Chỉ cần normalize schema + index.
+      end note
+    endif
+  endif
+}
+
+partition "Normalize + Post-process" {
+  :Normalize all parser outputs\ninto canonical schema;
+  :Build unified content blocks:\ntext / image / table / equation;
+  :Clean text + deduplicate;
+  :Detect language;
+  :Compute page stats / confidence summary;
+
+  note right
+    Đây là bước rất quan trọng.
+
+    Sau bước này mọi parser đều phải đổ về
+    1 schema chung, ví dụ:
+    - page_no
+    - block_id
+    - type
+    - text
+    - bbox
+    - parser_used
+    - confidence
+    - metadata phụ
+
+    Không để mỗi engine một format riêng.
+  end note
+
+  if (Quality acceptable?) then (Yes)
+    :Generate raw_text.txt;
+    :Generate content.md;
+    :Generate structured.json;
+    :Upload artifacts to MinIO;
+    :Update DocumentVersion metadata;
+    :Mark OCRJob = DONE;
+    :Create IndexJob = QUEUED;
+    :Optionally create EnrichmentJob = QUEUED;
+    :Enqueue Index task;
+    :Enqueue Enrichment task (optional);
+  else (No)
+    :Mark OCRJob = FAILED_OR_LOW_QUALITY;
+    note right
+      Nên fail sớm nếu:
+      - text quá ít
+      - confidence quá thấp
+      - file gần như rỗng
+      - duplicate/rác quá nhiều
+    end note
+    stop
+  endif
+}
+
+fork
+  partition "Index Worker" {
+    :Load structured.json + content.md;
+    :Structure-aware chunking\n(by heading / block / table);
+    :Apply token limit + overlap;
+    :Generate embeddings;
+    :UPSERT chunks + vectors into pgvector;
+    :Update DocumentVersion = READY_BASIC;
+
+    note right
+      Chunking nên ưu tiên:
+      1. heading/section
+      2. paragraph/block
+      3. rồi mới ép token limit
+
+      Metadata nên lưu theo chunk:
+      - document_id
+      - version_id
+      - page_from/page_to
+      - section_path
+      - parser_used
+      - block_ids
+      - content_hash
+    end note
+
+    note right
+      Nếu muốn tận dụng code Docling thêm:
+      đọc thư mục:
+      - docling/chunking
+    end note
+  }
+
+fork again
+
+  partition "Enrichment Worker" {
+    :Build multimodal content_list\nfrom canonical schema;
+    :Insert content_list into RAG-Anything;
+    :Build entities + relations + multimodal links;
+    :Save rag_doc_id + enrichment metadata;
+    :Update DocumentVersion = READY_ENRICHED;
+
+    note right
+      Đọc source RAG-Anything tại:
+      - raganything/raganything.py
+      - raganything/parser.py
+      - raganything/processor.py
+      - raganything/modalprocessors.py
+      - raganything/query.py
+      - raganything/config.py
+    end note
+
+    note right
+      Với flow của anh, nên ưu tiên:
+      Direct Content List Insertion
+      hơn là để RAG-Anything parse lại từ đầu.
+
+      Tức là:
+      Docling + Surya parse trước
+      -> normalize
+      -> map sang content_list
+      -> insert vào RAG-Anything
+    end note
+  }
+
+end fork
+
+partition "Search API" {
+  :Receive search query;
+  :Filter current/active DocumentVersion;
+  :Run vector retrieval on pgvector;
+  :Optionally combine keyword / metadata filter;
+
+  if (READY_ENRICHED?) then (Yes)
+    :Optionally run RAG-Anything\nhybrid / graph retrieval;
+  else (No)
+  endif
+
+  :Return ranked chunks + citations;
+
+  note right
+    Search path chuẩn:
+    - READY_BASIC: vector + keyword
+    - READY_ENRICHED: vector + keyword + graph/hybrid
+
+    Không để enrichment chặn searchable path.
+  end note
+}
+
+stop
+@enduml

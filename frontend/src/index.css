@@ -1,0 +1,356 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Core colors - Modern blue accent */
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+    
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    
+    /* Primary - Vibrant blue */
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 217 91% 95%;
+    --primary-dark: 217 91% 50%;
+    
+    /* Secondary - Soft gray */
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 222 47% 11%;
+    
+    /* Muted */
+    --muted: 210 20% 94%;
+    --muted-foreground: 215 16% 47%;
+    
+    /* Accent - Cyan/Teal */
+    --accent: 187 85% 43%;
+    --accent-foreground: 0 0% 100%;
+    --accent-light: 187 85% 95%;
+    
+    /* States */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --success-light: 142 76% 95%;
+    
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --warning-light: 38 92% 95%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-light: 0 84% 95%;
+    
+    /* UI Elements */
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 217 91% 60%;
+    
+    --radius: 0.75rem;
+    
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(222 47% 11% / 0.05);
+    --shadow: 0 4px 6px -1px hsl(222 47% 11% / 0.1), 0 2px 4px -2px hsl(222 47% 11% / 0.1);
+    --shadow-md: 0 10px 15px -3px hsl(222 47% 11% / 0.1), 0 4px 6px -4px hsl(222 47% 11% / 0.1);
+    --shadow-lg: 0 20px 25px -5px hsl(222 47% 11% / 0.1), 0 8px 10px -6px hsl(222 47% 11% / 0.1);
+    
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%) 0%, hsl(187 85% 43%) 100%);
+    --gradient-subtle: linear-gradient(180deg, hsl(210 20% 98%) 0%, hsl(210 20% 96%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(210 20% 99%) 100%);
+    
+    /* Typography */
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    
+    /* Sidebar */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217 91% 60%;
+  }
+
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+    
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+    
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 217 50% 20%;
+    --primary-dark: 217 91% 70%;
+    
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    
+    --accent: 187 85% 43%;
+    --accent-foreground: 0 0% 100%;
+    --accent-light: 187 50% 15%;
+    
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --success-light: 142 40% 15%;
+    
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --warning-light: 38 50% 15%;
+    
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+    --destructive-light: 0 50% 15%;
+    
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 212 27% 84%;
+    
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224 76% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217 91% 60%;
+
+    /* Dark gradients */
+    --gradient-card: linear-gradient(180deg, hsl(222 47% 10%) 0%, hsl(222 47% 6%) 100%);
+    --gradient-subtle: linear-gradient(180deg, hsl(222 47% 8%) 0%, hsl(222 47% 6%) 100%);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: none;
+  }
+  
+  *::-webkit-scrollbar {
+    display: none;
+  }
+  
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased overflow-x-hidden;
+    font-family: var(--font-sans);
+  }
+}
+
+@layer components {
+  /* Card styles */
+  .card-elevated {
+    @apply rounded-xl border border-border/60 bg-card/90 text-foreground;
+    box-shadow: var(--shadow);
+    background: var(--gradient-card);
+  }
+  
+  .card-elevated:hover {
+    box-shadow: var(--shadow-md);
+  }
+  
+  /* Button variants */
+  .btn-gradient {
+    background: var(--gradient-primary);
+    @apply text-primary-foreground font-medium px-6 py-2.5 rounded-lg transition-all duration-200;
+  }
+  
+  .btn-gradient:hover {
+    @apply opacity-90 scale-[1.02];
+    box-shadow: var(--shadow-md);
+  }
+  
+  .btn-gradient:active {
+    @apply scale-[0.98];
+  }
+  
+  .btn-gradient:disabled {
+    @apply opacity-50 cursor-not-allowed scale-100;
+    box-shadow: none;
+  }
+  
+  /* Input styles */
+  .input-modern {
+    @apply w-full px-4 py-2.5 rounded-lg border border-border bg-card/90 dark:bg-slate-900/70 text-foreground;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/80;
+    @apply transition-all duration-200;
+  }
+  
+  .input-modern::placeholder {
+    @apply text-muted-foreground;
+  }
+  
+  /* Toggle styles */
+  .toggle-chip {
+    @apply px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer;
+    @apply border border-border bg-secondary text-secondary-foreground;
+  }
+  
+  .toggle-chip.active {
+    @apply bg-primary text-primary-foreground border-primary;
+  }
+  
+  .toggle-chip:hover:not(.active) {
+    @apply bg-muted;
+  }
+  
+  /* Tab styles */
+  .tab-button {
+    @apply relative px-6 py-3 text-sm font-medium transition-all duration-200 rounded-lg;
+    @apply text-muted-foreground hover:text-foreground hover:bg-muted/60 dark:hover:bg-slate-900/60;
+  }
+  
+  .tab-button.active {
+    @apply text-primary bg-primary/10 dark:bg-primary/15;
+  }
+  
+  .tab-button.active::after {
+    content: '';
+    @apply absolute bottom-1 left-3 right-3 h-0.5 bg-primary rounded-full;
+  }
+  
+  /* Dropzone */
+  .dropzone {
+    @apply relative border-2 border-dashed border-border rounded-xl p-8;
+    @apply transition-all duration-200 cursor-pointer;
+    @apply bg-card/90 dark:bg-slate-900/70 hover:border-primary/50 hover:bg-primary-light/30;
+  }
+  
+  .dropzone.active {
+    @apply border-primary bg-primary-light/50;
+  }
+  
+  .dropzone.error {
+    @apply border-destructive bg-destructive-light/50;
+  }
+  
+  /* Text editor */
+  .text-editor {
+    @apply font-mono text-sm leading-relaxed;
+    font-family: var(--font-mono);
+  }
+  
+  /* Progress bar */
+  .progress-bar {
+    @apply h-2 rounded-full bg-muted dark:bg-slate-900 overflow-hidden;
+  }
+  
+  .progress-fill {
+    @apply h-full rounded-full transition-all duration-300 ease-out;
+    background: var(--gradient-primary);
+  }
+  
+  /* Skeleton */
+  .skeleton {
+    @apply animate-pulse bg-muted rounded;
+  }
+  
+  /* Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    @apply w-2;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/30;
+  }
+
+  /* Chat scrollbar - Thin and elegant with smart spacing */
+  .chat-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .chat-scrollbar::-webkit-scrollbar {
+    width: 6px; /* Fixed width */
+  }
+  
+  .chat-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  .chat-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-border/60 rounded-full;
+    transition: background-color 0.2s ease;
+  }
+  
+  .chat-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary/40;
+  }
+
+  /* Add padding when scrollbar is present */
+  .chat-scrollbar::-webkit-scrollbar-thumb {
+    margin-right: 2px;
+  }
+
+  /* Conversation list scrollbar - Even thinner with smart spacing */
+  .conversation-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border) / 0.5) transparent;
+  }
+
+  .conversation-scrollbar::-webkit-scrollbar {
+    width: 4px; /* Fixed width */
+  }
+  
+  .conversation-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  .conversation-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-border/40 rounded-full;
+    transition: background-color 0.2s ease;
+  }
+  
+  .conversation-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-primary/30;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  .shadow-glow {
+    box-shadow: 0 0 30px hsl(217 91% 60% / 0.3);
+  }
+
+  .scrollbar-none {
+    -ms-overflow-style: none; /* IE and Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none; /* Chrome, Safari */
+  }
+}

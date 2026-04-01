@@ -1,0 +1,267 @@
+# =============================================================================
+# Production RAG Orchestration Configuration
+# =============================================================================
+# This file centralizes all configuration for the RAG orchestration system.
+# Override values via environment variables or application config.
+
+# -----------------------------------------------------------------------------
+# SLA Budget Configuration (milliseconds)
+# -----------------------------------------------------------------------------
+sla_budgets:
+  simple:
+    default: 2000      # Simple factual queries
+    premium: 3000      # Premium tier users
+    enterprise: 5000   # Enterprise tier
+  
+  medium:
+    default: 4000
+    premium: 6000
+    enterprise: 8000
+  
+  complex:
+    default: 6000
+    premium: 9000
+    enterprise: 12000
+  
+  multi_hop:
+    default: 10000
+    premium: 15000
+    enterprise: 20000
+
+# Budget buffer (percentage reserved for overhead)
+budget_buffer_percent: 10
+
+# -----------------------------------------------------------------------------
+# Query Analysis Configuration
+# -----------------------------------------------------------------------------
+query_analysis:
+  # Complexity thresholds
+  complexity:
+    simple_max_words: 10
+    medium_max_words: 30
+    complex_keyword_patterns:
+      - "compare"
+      - "analyze"
+      - "relationship"
+      - "impact"
+      - "why"
+      - "how does"
+  
+  # Query type detection patterns
+  type_patterns:
+    factual:
+      - "what is"
+      - "who is"
+      - "when"
+      - "where"
+      - "define"
+    analytical:
+      - "why"
+      - "how does"
+      - "explain"
+      - "analyze"
+    comparative:
+      - "compare"
+      - "versus"
+      - "difference between"
+      - "better"
+    procedural:
+      - "how to"
+      - "steps to"
+      - "guide"
+      - "process"
+    multi_hop:
+      - "and then"
+      - "leads to"
+      - "causes"
+      - "relationship"
+
+# -----------------------------------------------------------------------------
+# Routing Configuration
+# -----------------------------------------------------------------------------
+routing:
+  # Pattern priorities (higher = preferred)
+  pattern_priorities:
+    direct_answer: 1.0
+    adaptive_rag: 0.9
+    self_rag: 0.85
+    corrective_rag: 0.8
+    graph_enhanced: 0.75
+    agentic_rag: 0.7
+  
+  # Query type to pattern mapping
+  default_mappings:
+    factual: "direct_answer"
+    analytical: "adaptive_rag"
+    comparative: "graph_enhanced"
+    procedural: "self_rag"
+    multi_hop: "agentic_rag"
+  
+  # Fallback patterns
+  fallbacks:
+    primary: "adaptive_rag"
+    secondary: "self_rag"
+    last_resort: "direct_answer"
+
+# -----------------------------------------------------------------------------
+# Hybrid Search Configuration
+# -----------------------------------------------------------------------------
+hybrid_search:
+  # Fusion strategy
+  strategy: "rrf"  # Options: rrf, intersection, weighted_sum
+  
+  # RRF parameters
+  rrf_k: 60  # RRF constant
+  
+  # Source weights for weighted sum
+  source_weights:
+    vector: 0.4
+    graph: 0.35
+    bm25: 0.25
+  
+  # HyDE configuration
+  hyde:
+    enabled: true
+    num_hypothetical_docs: 3
+    temperature: 0.7
+  
+  # Multi-query expansion
+  multi_query:
+    enabled: true
+    num_variants: 3
+  
+  # Result limits
+  top_k: 10
+  min_score: 0.1
+
+# -----------------------------------------------------------------------------
+# Quality Validation Configuration
+# -----------------------------------------------------------------------------
+validation:
+  # Confidence thresholds
+  thresholds:
+    confidence_minimum: 0.7
+    retry_below: 0.5
+    high_confidence: 0.9
+  
+  # Hallucination check
+  hallucination:
+    enabled: true
+    threshold: 0.7  # Faithfulness score minimum
+    trigger_retry: true
+  
+  # Fact checking
+  fact_check:
+    enabled: true
+    tolerance: 0.01  # Numerical comparison tolerance
+  
+  # Safety check
+  safety:
+    pii_detection: true
+    pii_redaction: true
+    toxicity_check: true
+    toxicity_threshold: 0.5
+    tone_alignment: false
+  
+  # Confidence weights
+  confidence_weights:
+    hallucination: 0.40
+    relevance: 0.30
+    safety: 0.30
+
+# -----------------------------------------------------------------------------
+# Tracing Configuration
+# -----------------------------------------------------------------------------
+tracing:
+  enabled: true
+  
+  # Providers (enable one or more)
+  providers:
+    opentelemetry:
+      enabled: true
+      endpoint: ""  # Set via OTEL_EXPORTER_OTLP_ENDPOINT
+      service_name: "rag-orchestration"
+    
+    langsmith:
+      enabled: false
+      api_key: ""  # Set via LANGSMITH_API_KEY
+      project: "rag-orchestration"
+    
+    langfuse:
+      enabled: false
+      public_key: ""  # Set via LANGFUSE_PUBLIC_KEY
+      secret_key: ""  # Set via LANGFUSE_SECRET_KEY
+      host: "https://cloud.langfuse.com"
+  
+  # Sampling
+  sample_rate: 1.0  # 1.0 = 100% of requests
+
+# -----------------------------------------------------------------------------
+# Feedback & Learning Configuration
+# -----------------------------------------------------------------------------
+feedback:
+  # Storage
+  async_storage: true
+  storage_backend: "database"  # Options: database, redis, memory
+  
+  # Learning pipeline
+  learning:
+    enabled: true
+    min_samples: 20
+    analysis_interval_hours: 24
+    
+    # A/B testing
+    ab_testing:
+      enabled: true
+      default_test_percentage: 0.5
+      default_duration_days: 7
+      promotion_threshold: 0.10  # 10% improvement required
+  
+  # Anomaly detection
+  anomaly:
+    enabled: true
+    threshold_percent: 20
+    high_severity_percent: 50
+
+# -----------------------------------------------------------------------------
+# Performance Metrics Configuration
+# -----------------------------------------------------------------------------
+metrics:
+  # Collection
+  max_samples_per_pattern: 10000
+  default_window_hours: 24
+  
+  # Aggregation
+  cache_ttl_seconds: 60
+  
+  # Persistence
+  persist_to_database: true
+  persist_interval_seconds: 300
+
+# -----------------------------------------------------------------------------
+# Framework Integration Configuration
+# -----------------------------------------------------------------------------
+integrations:
+  langchain:
+    enabled: true
+    callback_handler: true
+  
+  llamaindex:
+    enabled: true
+    callback_manager: true
+  
+  # Evaluation frameworks
+  ragas:
+    enabled: false
+    metrics:
+      - "faithfulness"
+      - "answer_relevancy"
+      - "context_precision"
+      - "context_recall"
+  
+  deepeval:
+    enabled: false
+    tests:
+      - "AnswerRelevancyTest"
+      - "FaithfulnessTest"
+      - "ContextualPrecisionTest"

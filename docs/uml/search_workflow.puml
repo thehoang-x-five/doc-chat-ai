@@ -1,0 +1,158 @@
+@startuml search_workflow
+!theme plain
+title Search & Retrieval Workflow
+skinparam backgroundColor #FFFFFF
+
+|#LightBlue|Input|
+start
+:Search Query;
+note right
+  **Parameters:**
+  - query: string
+  - workspace_id: UUID
+  - document_ids?: UUID[]
+  - tags?: string[]
+  - limit: int (default 5)
+end note
+
+|#LightGreen|Cache Layer|
+
+partition "Search Cache Check (2-5ms)" #E8F5E9 {
+  :SearchCache.get;
+  note right
+    **Redis-based cache**
+    Key: hash(query + workspace + filters)
+    TTL: 5 minutes
+  end note
+  
+  if (Cache HIT?) then (yes)
+    :Return cached results;
+    stop
+  endif
+}
+
+|#LightYellow|Embedding|
+
+partition "Query Embedding (20-50ms)" #FFFDE7 {
+  :EmbeddingService.embed;
+  note right
+    **Model:** text-embedding-3-small
+    **Dimension:** 1536
+    **Batch size:** 1 (single query)
+  end note
+  
+  :Generate query vector;
+}
+
+|#LightPink|Hybrid Search|
+
+partition "Vector Search (50-200ms)" #FCE4EC {
+  :PGVector similarity search;
+  note right
+    **SQL:**
+    SELECT ... 
+    FROM chunks
+    WHERE workspace_id = ?
+      AND (document_id IN ? OR tags @> ?)
+    ORDER BY embedding <=> query_vector
+    LIMIT ?
+  end note
+  
+  :Get top-K by cosine similarity;
+}
+
+partition "BM25 Search (20-100ms)" #FFF3E0 {
+  :PostgreSQL full-text search;
+  note right
+    **SQL:**
+    SELECT ...
+    FROM chunks
+    WHERE workspace_id = ?
+      AND to_tsvector('vietnamese', content)
+          @@ plainto_tsquery('vietnamese', ?)
+    ORDER BY ts_rank(...) DESC
+    LIMIT ?
+  end note
+  
+  :Get top-K by text relevance;
+}
+
+|#LightCyan|Fusion|
+
+partition "Result Fusion (5-10ms)" #E0F7FA {
+  :Reciprocal Rank Fusion (RRF);
+  note right
+    **Algorithm:**
+    For each result r:
+      score(r) = Σ 1/(k + rank_i(r))
+    
+    k = 60 (default)
+  end note
+  
+  :Merge vector + BM25 results;
+  :Deduplicate by chunk_id;
+  :Sort by fused score;
+}
+
+|#LightGreen|Reranking|
+
+partition "Cross-Encoder Rerank (50-150ms)" #E8F5E9 {
+  :RerankerService.rerank;
+  note right
+    **Model:** BAAI/bge-reranker-base
+    
+    For each (query, chunk):
+      score = cross_encoder(query, chunk.content)
+  end note
+  
+  :Reorder by reranker score;
+  :Select final top-K;
+}
+
+|#LightBlue|Output|
+
+partition "Result Processing" #E3F2FD {
+  :Build SearchResult objects;
+  note right
+    **Each result contains:**
+    - chunk_id
+    - content
+    - score (reranker)
+    - document_title
+    - page
+    - metadata
+  end note
+}
+
+partition "Cache Update (2-5ms)" #E8F5E9 {
+  :SearchCache.set;
+  note right
+    Cache for future identical queries
+  end note
+}
+
+:Return SearchResult[];
+stop
+
+legend right
+  **Filter Options (Combobox: Documents)**
+  |= Option |= Effect |
+  | All Documents | No filter (workspace scope) |
+  | Selected Documents | Filter by document_ids |
+  | Tagged Documents | Filter by tags array |
+  
+  **Performance Factors**
+  |= Factor |= Impact |
+  | Workspace size | Linear with chunks |
+  | Document filter | Reduces search space |
+  | Limit parameter | Top-K cutoff |
+  | Cache hit | Skip entire flow |
+  
+  **Scoring Pipeline**
+  1. Vector similarity (cosine)
+  2. BM25 text relevance
+  3. RRF fusion score
+  4. Cross-encoder rerank
+endlegend
+
+@enduml

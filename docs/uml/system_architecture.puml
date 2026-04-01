@@ -1,0 +1,244 @@
+@startuml system_architecture
+!theme plain
+title RAG-Anything System Architecture (Current — StreamManager)
+skinparam backgroundColor #FFFFFF
+skinparam componentStyle uml2
+
+' Define colors
+!define PRIMARY #1565C0
+!define SECONDARY #43A047
+!define TERTIARY #F57C00
+!define QUATERNARY #7B1FA2
+
+package "Frontend (React + TypeScript)" as FE #E3F2FD {
+  [Chat UI] as ChatUI
+  [Document Manager] as DocMgr
+  [Workspace Manager] as WSMgr
+
+  note bottom of ChatUI
+    **SSE Stream Consumer**
+    - sendMessageStream()
+    - 7 event handlers
+    - Model/Doc comboboxes
+  end note
+}
+
+package "API Layer (FastAPI)" as API #E8F5E9 {
+  [Chat Router\n/stream (SSE)] as ChatRouter
+  [Search Router] as SearchRouter
+  [Document Router] as DocRouter
+  [Auth Router] as AuthRouter
+  [Memori Router] as MemoriRouter
+}
+
+package "Service Layer" as SVC #FFFDE7 {
+  package "Conversation Services" #FFF8E1 {
+    [StreamManager] as SM PRIMARY
+    note right of SM
+      **Main chat orchestrator**
+      8-stage SSE pipeline
+    end note
+    [ChatService] as ChatSvc
+    note right of ChatSvc : DB CRUD only
+    [IntentDetector] as Intent
+    [ParallelExecutor] as Parallel
+    [DedupCache] as Dedup
+    [MemoryCacheManager] as MemCache
+  }
+
+  package "Memory Services" #E0F7FA {
+    [MemoryManager] as Memory
+    note right of Memory: Short-term (10 msgs)
+
+    [MemoriManager] as Memori
+    note right of Memori: Long-term facts
+
+    [GraphSearchService] as GraphSearch
+    note right of GraphSearch: Knowledge graph
+
+    [AutoCognifyService] as AutoCognify
+    note right of AutoCognify: Auto fact extraction
+
+    [MemifyService] as Memify
+    note right of Memify: Graph enrichment
+  }
+
+  package "Core RAG Services" #E3F2FD {
+    [RAGService] as RAG
+    [EmbeddingService] as Embed
+    [RerankerService] as Rerank
+    [QueryRewriterService] as Rewrite
+    [AIProviderManager] as Provider
+  }
+
+  package "RAG Patterns (10)" #BBDEFB {
+    [PatternOrchestrator] as Orch
+    [CorrectiveRAG] as Corrective
+    [SelfRAG] as SelfR
+    [AdaptiveRAG] as Adaptive
+    [CORAG] as Corag
+    [SpeculativeRAG] as Speculative
+    [CORAL] as Coral
+    [REVEAL] as Reveal
+    [SemanticHighlight] as Semantic
+    [Hybrid/RAGAnything] as Hybrid
+  }
+
+  package "Search Services" #E8F5E9 {
+    [HybridRetrieverService] as HybridSearch
+    [SearchCacheService] as SCache
+    [RAGCacheService] as RCache
+    [TimelineService] as Timeline
+  }
+
+  package "Quality Services" #FCE4EC {
+    [GuardrailsService] as Guards
+    note right of Guards: ✅ Used by StreamManager
+    [HallucinationChecker] as Halluc
+    note right of Halluc: ✅ Used (post-stream)
+    [GroundingVerifier] as Ground
+    note right of Ground: ✅ Used (post-stream)
+    [SafetyChecker] as Safety
+    note right of Safety: ⚠️ NOT used by StreamManager
+    [ConfidenceScorer] as Conf
+    note right of Conf: ⚠️ NOT used by StreamManager
+    [FactChecker] as Fact
+    note right of Fact: ⚠️ NOT used by StreamManager
+    [ResultValidator] as Valid
+    note right of Valid: ⚠️ NOT used by StreamManager
+  }
+
+  package "Generation Services" #F3E5F5 {
+    [ImageGenerationService] as ImgGen
+    [SummarizeService] as Summarize
+    [CompareService] as Compare
+  }
+
+  package "Tools" #FFE0B2 {
+    [FunctionCallingService] as FC
+    [ToolsServiceV2] as Tools
+    [FunctionRegistry] as FuncReg
+  }
+}
+
+package "Infrastructure" as INFRA #ECEFF1 {
+  database "PostgreSQL\n+ PGVector" as PG
+  database "Redis" as Redis
+  queue "Celery\n(RabbitMQ)" as Celery
+}
+
+package "External APIs (LLM Providers)" as EXT #F3E5F5 {
+  cloud "OpenAI" as OpenAI
+  cloud "Anthropic" as Anthropic
+  cloud "Google AI" as Google
+  cloud "Groq" as Groq
+  cloud "DeepSeek" as DeepSeek
+  cloud "Ollama" as Ollama
+}
+
+' Frontend connections
+ChatUI --> ChatRouter : SSE (POST /stream)
+DocMgr --> DocRouter : HTTP
+WSMgr --> API : HTTP
+
+' API to Service
+ChatRouter --> SM : stream_response()
+SearchRouter --> HybridSearch
+DocRouter --> Embed
+MemoriRouter --> Memori
+
+' StreamManager main flow (numbered stages)
+SM --> Dedup : ① Dedup
+SM --> Intent : ② Intent
+SM --> Guards : ③ Guardrails
+SM --> FC : ④ Function Calling
+SM --> ImgGen : ⑤ Image Gen
+SM --> MemCache : ⑥a Cache
+SM --> Parallel : ⑥b Parallel Recall
+SM --> RAG : ⑦ RAG Stream
+SM --> Halluc : ⑧ Post Quality
+SM --> Ground : ⑧ Post Quality
+SM ..> AutoCognify : ⑨ Background
+
+' StreamManager uses ChatService for DB
+SM --> ChatSvc : DB operations
+
+' Parallel Memory Recall (3 tasks)
+Parallel --> Memory : Short-term
+Parallel --> Memori : Long-term
+Parallel --> GraphSearch : Graph
+
+' Function calling
+FC --> Tools
+FC --> FuncReg
+
+' RAG internal connections
+RAG --> Rewrite : Query expansion
+RAG --> HybridSearch : Retrieval
+RAG --> Rerank : Reranking
+RAG --> Provider : LLM generation
+RAG --> Orch : Pattern selection
+HybridSearch --> Embed
+HybridSearch --> PG
+
+' Pattern Orchestrator
+Orch --> Corrective
+Orch --> SelfR
+Orch --> Adaptive
+Orch --> Corag
+Orch --> Speculative
+Orch --> Coral
+Orch --> Reveal
+Orch --> Semantic
+Orch --> Hybrid
+
+' External API connections
+Provider --> OpenAI
+Provider --> Anthropic
+Provider --> Google
+Provider --> Groq
+Provider --> DeepSeek
+Provider --> Ollama
+Intent --> Provider : LLM intent
+
+' Memory Services internal
+AutoCognify --> Memori : Store facts
+AutoCognify --> Provider : LLM extraction
+Memify --> Memori : Enrich graph
+Memify --> Provider : LLM inference
+GraphSearch --> Memori : Query facts
+
+' Infrastructure connections
+SM --> PG : Save messages
+ChatSvc --> PG : CRUD
+Memori --> PG : Store facts/triples
+Guards --> Redis : Config cache
+Dedup --> Redis : Duplicate check
+MemCache --> Redis : Memory cache
+SCache --> Redis : Search cache
+RCache --> Redis : RAG cache
+Memori --> Celery : Async extraction
+
+legend right
+  **System Components**
+  |= Layer |= Technology |
+  | Frontend | React, TypeScript, Vite |
+  | API | FastAPI (Python 3.11+) |
+  | Database | PostgreSQL + PGVector |
+  | Cache | Redis |
+  | Queue | Celery + RabbitMQ |
+  | LLM | OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama |
+
+  **StreamManager Pipeline (8 stages)**
+  ① Dedup Cache (Redis)
+  ② Intent Detection (GREETING/CHITCHAT fast path)
+  ③ Input Guardrails (5 rails)
+  ④ Function Calling (metadata queries)
+  ⑤ Image Generation
+  ⑥ Memory Recall (3 parallel + cache)
+  ⑦ RAG Stream + Mid-stream QA
+  ⑧ Post Quality (Hallucination + Grounding)
+  ⑨ Background (Memori + Dedup save)
+endlegend
+
+@enduml

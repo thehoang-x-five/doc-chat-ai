@@ -1,0 +1,189 @@
+@startuml rag_orchestration
+!theme plain
+title RAG Service — Orchestration Workflow (Current)
+skinparam backgroundColor #FFFFFF
+
+|#LightCyan|Input|
+start
+:Question + Filters + Context;
+note right
+  **From StreamManager._stream_with_context:**
+  - question
+  - workspace_id
+  - document_ids / tags
+  - model
+  - combined_memory (memory+memori+graph)
+  - conversation_history (10 msgs)
+end note
+
+|#LightBlue|Query Processing|
+
+partition "Step 1: Query Rewriting" #E3F2FD {
+  :QueryRewriterService.rewrite;
+  note right
+    **Strategy: STEP_BACK**
+    - Original query
+    - Step-back query (broader)
+    - Sub-questions
+  end note
+
+  :Inject step_back_query to context;
+}
+
+partition "Step 2: Hybrid Retrieval (PARALLEL)" #E8F5E9 {
+  fork
+    :Vector Search (PGVector);
+    note right
+      **EmbeddingService**
+      - text-embedding-3-small
+      - 1536 dimensions
+    end note
+  fork again
+    :BM25 Search (PostgreSQL);
+    note right
+      **Full-text search**
+      - tsvector index
+      - Vietnamese tokenizer
+    end note
+  end fork
+
+  :Merge Results (RRF);
+  note right
+    **Reciprocal Rank Fusion**
+    score = Σ 1/(k + rank)
+  end note
+
+  :Deduplicate chunks;
+}
+
+partition "Step 3: Reranking" #FFF3E0 {
+  :RerankerService.rerank;
+  note right
+    **Cross-encoder model**
+    - BAAI/bge-reranker-base
+    - Top-K selection
+  end note
+
+  :Select top N chunks;
+}
+
+|#LightPink|Pattern Selection|
+
+partition "Step 4: Pattern Orchestration" #FCE4EC {
+  :PatternOrchestrator.execute;
+
+  switch (Pattern?)
+  case (auto/orchestrated)
+    :QueryAnalyzer → Select optimal;
+  case (hybrid)
+    :RAGAnything (Graph RAG);
+  case (corrective)
+    :CorrectiveRAG (verify docs);
+  case (self)
+    :SelfRAG (self-reflection);
+  case (adaptive)
+    :AdaptiveRAG (strategy switch);
+  case (corag)
+    :CORAG (MCTS chunk selection);
+  case (speculative)
+    :SpeculativeRAG (parallel drafts);
+  case (coral)
+    :CORAL (multi-turn context);
+  case (reveal)
+    :REVEAL (multimodal);
+  case (semantic_highlight)
+    :SemanticHighlight (source highlight);
+  endswitch
+}
+
+|#LightGreen|LLM Generation|
+
+partition "Step 5: Prompt Construction" #E8F5E9 {
+  :Build system prompt;
+  note right
+    **Includes:**
+    - Role/persona
+    - Retrieved chunks
+    - Memory context
+    - Graph context
+    - Conversation history
+  end note
+
+  :Construct messages array;
+}
+
+partition "Step 6: LLM Streaming" #FFFDE7 {
+  :AIProviderManager;
+
+  switch (Provider?)
+  case (OpenAI)
+    :GPT-4o / GPT-4-Turbo;
+  case (Anthropic)
+    :Claude-3.5-Sonnet/Haiku;
+  case (Google)
+    :Gemini-1.5-Pro/Flash;
+  case (Groq)
+    :Llama-3 / Mixtral;
+  case (DeepSeek)
+    :DeepSeek-Chat;
+  case (Ollama)
+    :Local models;
+  endswitch
+
+  :Stream tokens (async generator);
+  :Extract citations from chunks;
+}
+
+partition "Step 6b: LLM Fallback" #FFEBEE {
+  if (Answer empty?) then (yes)
+    :Use LLM fallback;
+    note right
+      Combine:
+      - memory_context
+      - retrieved_docs
+      - conversation_history
+    end note
+    :Direct LLM generation;
+  endif
+}
+
+|#LightBlue|Output|
+
+:Yield chunks as AsyncGenerator;
+note right
+  **StreamManager receives:**
+  - str chunks → TOKEN events
+  - dict {citations: [...]} → citations
+  - dict {stats: {...}} → model stats
+  
+  **Quality checks happen
+  OUTSIDE RAGService,
+  inside StreamManager ⑧**
+end note
+
+:Return to StreamManager;
+
+stop
+
+legend right
+  **10 RAG Patterns**
+  |= Pattern |= Key Feature |
+  | orchestrated | Auto-select optimal |
+  | hybrid | RAGAnything + Graph |
+  | corrective | Verify & correct docs |
+  | self | Self-reflection loop |
+  | adaptive | Dynamic strategy |
+  | corag | MCTS chunk selection |
+  | speculative | Parallel drafts |
+  | coral | Multi-turn context |
+  | reveal | Multimodal query |
+  | semantic_highlight | Source highlighting |
+
+  **Important Notes:**
+  - Memory context built in StreamManager ⑥
+  - Quality checks done in StreamManager ⑧
+  - RAGService only handles retrieval + generation
+  - query_stream() yields async chunks
+endlegend
+
+@enduml
