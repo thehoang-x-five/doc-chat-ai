@@ -1,0 +1,12 @@
+# ==============================================================================
+# EXTRA DEPENDENCIES - Add new packages here
+# This file is installed in a separate Docker layer AFTER requirements.txt
+# So adding packages here won't re-download the heavy ones (~500MB+)
+# ==============================================================================
+
+# Add new packages below this line:
+paddlepaddle>=3.0.0          # PaddlePaddle runtime (CPU) — REQUIRED by paddleocr PPStructureV3
+paddleocr>=3.0.0             # PaddleOCR PP-OCRv5 + PPStructureV3 (CPU-optimized)
+llama-index-core>=0.10.0     # SentenceSplitter for sentence-aware chunking
+neo4j>=5.14.0                # Neo4j python driver for LightRAG graph storage
+pypdf>=3.17.0                # PDF text-layer inspection for scanned-vs-digital routing

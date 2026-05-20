@@ -59,7 +59,7 @@ const Dropzone = ({ files, onFiles, onError, multiple = false, disabled }: Dropz
         <div>
           <p className="font-semibold text-foreground">Drag & drop files</p>
           <p className="text-sm text-muted-foreground">
-            JPG/PNG/WebP/PDF/DOCX/TXT/MD up to 15MB. {multiple ? 'Upload multiple files.' : 'Single file.'}
+            PDF/DOCX/PPTX/XLSX/JSON/RTF/ODT/images/text up to 50MB. {multiple ? 'Upload multiple files.' : 'Single file.'}
           </p>
         </div>
         <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary">
@@ -69,7 +69,7 @@ const Dropzone = ({ files, onFiles, onError, multiple = false, disabled }: Dropz
             disabled={disabled}
             multiple={multiple}
             onChange={(e) => handleFiles(e.target.files)}
-            accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.txt,.md"
+            accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.json,.rtf,.odt,.html,.xhtml,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.gif"
           />
           <span>Browse files</span>
         </label>

@@ -1,0 +1,9 @@
+DOC-CHAT-AI / THEDOCAI (AI Chat + RAG Knowledge Platform) | Solo Developer | 5 months
+Tech stack: React, TypeScript, Vite, Tailwind CSS, FastAPI, SQLAlchemy, PostgreSQL + pgvector, Redis, Celery, MinIO, Neo4j, LlamaIndex, LightRAG, SentenceTransformers, Docker Compose
+GitHub:
+- Built an AI chat platform with workspace-based conversations, selectable chat modes, model selection, streaming responses, citations, feedback, and conversation history.
+- Implemented AI model/provider management across Cloud Code, Gemini, Groq, DeepSeek, Ollama, and image/text model catalogs with provider health checks, quota visibility, and API key configuration.
+- Developed a RAG knowledge-base workflow for document upload, workspace/category organization, async indexing, chunk storage, vector embeddings, and searchable document context for grounded chat.
+- Designed hybrid retrieval using keyword search, pgvector similarity search, reranking, query rewriting, and graph-enhanced RAG to improve answer relevance for document-based questions.
+- Added grounding, citation mapping, token/context usage display, and answer metadata so users can verify which documents and chunks were used by the AI response.
+- Built a Memori-style memory layer with fact extraction, semantic recall, preferences/attributes, knowledge graph triples, and memory management UI to preserve useful user/context facts across chats.

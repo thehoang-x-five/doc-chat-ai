@@ -12,7 +12,7 @@
 
 services:
   # ==============================================================================
-  # THEDOCAI FRONTEND (React + Vite + Nginx)
+  # THEDOCAI FRONTEND (React + Vite Dev Server - Hot Reload)
   # ==============================================================================
   frontend:
     build:
@@ -20,17 +20,20 @@ services:
       dockerfile: Dockerfile
     container_name: thedocai-frontend
     ports:
-      - "${FRONTEND_PORT:-5173}:80"
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app            # Dev mode: bind mount for hot reload
+      - /app/node_modules          # Keep container's node_modules (don't overwrite)
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     networks:
       - rag-network
 
@@ -71,7 +74,7 @@ services:
       - ./server/.env
     volumes:
       - ./server:/app              # Dev mode: mount code for hot reload
-      - backend-storage:/app/storage
+      - ./server/storage:/app/storage
       - backend-logs:/app/logs
       - huggingface-cache:/root/.cache/huggingface
     depends_on:
@@ -135,6 +138,31 @@ services:
       - rag-network
 
   # ==============================================================================
+  # NEO4J GRAPH DATABASE (For LightRAG)
+  # ==============================================================================
+  neo4j:
+    image: neo4j:5
+    container_name: thedocai-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/neo4jpassword
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"   # HTTP Console
+      - "${NEO4J_BOLT_PORT:-7687}:7687"   # Bolt API
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-network
+
+  # ==============================================================================
   # CELERY WORKER - OCR (Heavy background jobs)
   # ==============================================================================
   celery-worker-ocr:
@@ -148,15 +176,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
-      # Surya Performance Optimizations
+      # PaddleOCR Configuration
       - IMAGE_DPI=144
       - IMAGE_DPI_HIGHRES=144
-      - USE_SURYA_FOR_PDF=false
-      - COMPILE_ALL=false
-      - RECOGNITION_BATCH_SIZE=4
-      - DETECTOR_BATCH_SIZE=2
-      - LAYOUT_BATCH_SIZE=2
-      - TABLE_REC_BATCH_SIZE=4
       # MinIO/S3 Object Storage
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
@@ -167,7 +189,7 @@ services:
       - ./server/.env
     volumes:
       - ./server:/app              # Dev mode: mount code for hot reload
-      - backend-storage:/app/storage
+      - ./server/storage:/app/storage
       - backend-logs:/app/logs
       - huggingface-cache:/root/.cache/huggingface
     depends_on:
@@ -185,6 +207,12 @@ services:
         reservations:
           memory: 512M
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.queue.celery_app inspect ping -d celery@$$HOSTNAME | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - rag-network
 
@@ -212,7 +240,7 @@ services:
       - ./server/.env
     volumes:
       - ./server:/app              # Dev mode: mount code for hot reload
-      - backend-storage:/app/storage
+      - ./server/storage:/app/storage
       - backend-logs:/app/logs
       - huggingface-cache:/root/.cache/huggingface
     depends_on:
@@ -223,6 +251,12 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.queue.celery_app inspect ping -d celery@$$HOSTNAME | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - rag-network
 
@@ -240,6 +274,10 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/thedocai
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/api
+      # Neo4j Graph Database (LightRAG KG storage)
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=neo4jpassword
       # MinIO/S3 Object Storage
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
@@ -250,7 +288,7 @@ services:
       - ./server/.env
     volumes:
       - ./server:/app              # Dev mode: mount code for hot reload
-      - backend-storage:/app/storage
+      - ./server/storage:/app/storage
       - backend-logs:/app/logs
       - huggingface-cache:/root/.cache/huggingface
     depends_on:
@@ -260,7 +298,15 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.queue.celery_app inspect ping -d celery@$$HOSTNAME | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - rag-network
 
@@ -347,4 +393,6 @@ volumes:
   minio-data:
     driver: local
   huggingface-cache:
+    driver: local
+  neo4j-data:
     driver: local

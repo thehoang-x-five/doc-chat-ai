@@ -45,13 +45,15 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
         document_version_id: DocumentVersion UUID string
         config: Optional configuration dict
     """
+    from app.core.config import settings
     from app.services.analytics.job_service import JobService
     from app.services.documents.chunking_service import ChunkingService
-    from app.services.core.embedding_service import EmbeddingService
+    from app.services.core.embedding_service import get_embedding_service
     from app.db.models import DocumentVersion, Chunk, JobStatus
     from app.storage.object_store import ObjectStore
     from sqlalchemy import select
     from sqlalchemy.orm import joinedload
+    import json
     
     SyncSession = _make_sync_session()
     
@@ -99,6 +101,18 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
                 raise ValueError("No extracted text or markdown available. Run OCR first.")
             
             text_content = storage.download(text_key).decode("utf-8")
+            structured_json = {}
+            if doc_version.structured_json_key:
+                try:
+                    structured_json = json.loads(
+                        storage.download(doc_version.structured_json_key).decode("utf-8")
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to load structured_json for %s: %s",
+                        document_version_id,
+                        exc,
+                    )
             
             # Chunk text
             job_service.update_status_sync(
@@ -116,8 +130,28 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
                 chunk_overlap=chunk_overlap,
             )
             
-            text_chunks = chunking_service.chunk_text(text_content)
-            logger.info(f"Created {len(text_chunks)} chunks")
+            content_list = structured_json.get("content_list") or []
+            use_structure_aware = (
+                config.get("chunking_strategy")
+                or getattr(chunking_service, "strategy", None)
+                or "structure_aware"
+            ) == "structure_aware"
+
+            if use_structure_aware and content_list:
+                text_chunks = chunking_service.chunk_content_list(
+                    content_list,
+                    fallback_text=text_content,
+                )
+                logger.info(
+                    "Created %s chunks (structure-aware canonical content_list)",
+                    len(text_chunks),
+                )
+            else:
+                text_chunks = chunking_service.chunk_by_sentences(text_content)
+                logger.info(
+                    "Created %s chunks (LlamaIndex SentenceSplitter)",
+                    len(text_chunks),
+                )
             
             if not text_chunks:
                 logger.warning(f"No chunks generated for {document_version_id}. Document may be empty or unreadable.")
@@ -130,10 +164,17 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
             )
             session.commit()
             
-            embedding_service = EmbeddingService()
+            embedding_service = get_embedding_service()
             chunk_texts = [c.content for c in text_chunks]
             # embed_batch returns (List[List[float]], EmbeddingModelInfo)
-            embeddings, _model_info = embedding_service.embed_batch(chunk_texts)
+            embeddings, model_info = embedding_service.embed_batch(chunk_texts)
+            logger.info(
+                "Embedding %s chunks with %s/%s (dim=%s)",
+                len(chunk_texts),
+                model_info.provider,
+                model_info.name,
+                model_info.dimension,
+            )
             
             # Delete existing chunks for this version
             session.execute(
@@ -159,8 +200,10 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
                     token_count=text_chunk.token_count,
                     page_start=text_chunk.metadata.page_start,
                     page_end=text_chunk.metadata.page_end,
+                    bbox_json=text_chunk.metadata.bbox_json,
                     section_title=text_chunk.metadata.section_title,
                     hash=text_chunk.hash,
+                    chunk_type=text_chunk.metadata.chunk_type,
                 )
                 
                 # Set embedding if pgvector is available
@@ -171,9 +214,29 @@ def process_index(self, job_id: str, document_version_id: str, config: dict = No
             
             session.commit()
             
-            # Update document status to READY_BASIC (searchable, enrichment may still be pending)
+            strict_enrichment_pending = (
+                settings.STRICT_NEO4J
+                and settings.ENABLE_RAGANYTHING_PARSING
+                and bool(text_content.strip())
+            )
+
+            # Update document status after indexing.
             if doc_version.document:
-                doc_version.document.status = "READY_BASIC"
+                if doc_version.document.status == "READY_ENRICHED":
+                    logger.info(
+                        "[Index] Document %s is already READY_ENRICHED; keeping enriched status",
+                        doc_version.document.id,
+                    )
+                elif strict_enrichment_pending:
+                    doc_version.document.status = "INDEXING"
+                    doc_version.document.processing_progress = 95
+                    doc_version.document.processing_step = (
+                        f"Indexed {len(text_chunks)} chunks, waiting for strict Neo4j enrichment"
+                    )
+                else:
+                    doc_version.document.status = "READY_BASIC"
+                    doc_version.document.processing_progress = 100
+                    doc_version.document.processing_step = f"Indexed {len(text_chunks)} chunks"
             session.commit()
             
             # Mark job as done

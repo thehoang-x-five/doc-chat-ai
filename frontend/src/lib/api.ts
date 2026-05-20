@@ -700,20 +700,29 @@ class ApiClient {
   async getDocumentContent(documentId: string): Promise<string> {
     // Fetch full text from MinIO via the /text endpoint (no truncation)
     // Use markdown format for better rendering of DOCX/TXT files
-    const token = this.accessToken;
-    const res = await fetch(`${this.baseUrl}/api/v1/documents/${documentId}/text?format=markdown`, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-    });
-    if (res.ok) {
-      return await res.text();
-    }
+    const fetchText = async (format: 'markdown' | 'text'): Promise<string | null> => {
+      const doFetch = () => fetch(`${this.baseUrl}/api/v1/documents/${documentId}/text?format=${format}`, {
+        headers: this.accessToken ? { 'Authorization': `Bearer ${this.accessToken}` } : {},
+      });
+
+      let res = await doFetch();
+      if (res.status === 401 && this.refreshToken) {
+        const refreshed = await this.refreshAccessToken();
+        if (refreshed) {
+          res = await doFetch();
+        }
+      }
+
+      return res.ok ? await res.text() : null;
+    };
+
+    const markdown = await fetchText('markdown');
+    if (markdown !== null) return markdown;
+
     // Fallback: try plain text format
-    const res2 = await fetch(`${this.baseUrl}/api/v1/documents/${documentId}/text?format=text`, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-    });
-    if (res2.ok) {
-      return await res2.text();
-    }
+    const text = await fetchText('text');
+    if (text !== null) return text;
+
     // Last fallback: concatenate chunks
     const chunks = await this.getDocumentChunks(documentId);
     return chunks.map(c => c.content).join('\n\n');
@@ -752,11 +761,18 @@ class ApiClient {
    * Download the original document file as a Blob.
    */
   async downloadDocumentBlob(documentId: string, signal?: AbortSignal): Promise<{ blob: Blob; filename: string; mimeType: string }> {
-    const token = this.accessToken;
-    const res = await fetch(`${this.baseUrl}/api/v1/documents/${documentId}/download`, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    const doFetch = () => fetch(`${this.baseUrl}/api/v1/documents/${documentId}/download`, {
+      headers: this.accessToken ? { 'Authorization': `Bearer ${this.accessToken}` } : {},
       signal,
     });
+
+    let res = await doFetch();
+    if (res.status === 401 && this.refreshToken) {
+      const refreshed = await this.refreshAccessToken();
+      if (refreshed) {
+        res = await doFetch();
+      }
+    }
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
@@ -1745,6 +1761,17 @@ class ApiClient {
     return this.request(
       `/api/v1/memori/facts/${factId}/pin?${queryParams}`,
       { method: 'POST' },
+      true
+    );
+  }
+
+  async deleteFact(factId: number, workspaceId: string): Promise<void> {
+    const queryParams = new URLSearchParams();
+    queryParams.set('workspace_id', workspaceId);
+
+    await this.request(
+      `/api/v1/memori/facts/${factId}?${queryParams}`,
+      { method: 'DELETE' },
       true
     );
   }

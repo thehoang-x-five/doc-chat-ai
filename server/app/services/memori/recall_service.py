@@ -177,6 +177,7 @@ class MemoriRecall:
                 similarity=r.get("similarity", 0.0),
                 lexical_score=r.get("lexical_score", 0.0),
                 rank_score=r.get("rank_score", 0.0),
+                importance_score=r.get("importance_score", 1.0),
             )
             for r in filtered
         ]
@@ -512,6 +513,7 @@ class MemoriRecall:
                     similarity=r.get("similarity", 0.0),
                     lexical_score=r.get("lexical_score", 0.0),
                     rank_score=r.get("rank_score", 0.0),
+                    importance_score=r.get("importance_score", 1.0),
                 )
                 for r in filtered
             ]

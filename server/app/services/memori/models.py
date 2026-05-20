@@ -261,6 +261,7 @@ class RecalledFact:
     similarity: float
     lexical_score: float = 0.0
     rank_score: float = 0.0
+    importance_score: float = 1.0
 
 
 @dataclass

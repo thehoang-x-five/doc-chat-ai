@@ -138,11 +138,27 @@ class Settings(BaseSettings):
     )
     
     # ==========================================================================
+    # NEO4J GRAPH DATABASE (for LightRAG Knowledge Graph)
+    # ==========================================================================
+    NEO4J_URI: str = Field(
+        default="bolt://neo4j:7687",
+        description="Neo4j Bolt URI for LightRAG graph storage"
+    )
+    NEO4J_USERNAME: str = Field(
+        default="neo4j",
+        description="Neo4j username"
+    )
+    NEO4J_PASSWORD: str = Field(
+        default="neo4jpassword",
+        description="Neo4j password"
+    )
+    
+    # ==========================================================================
     # EMBEDDING MODEL CONFIGURATION
     # ==========================================================================
     # Embedding model selection
     EMBEDDING_MODEL: str = Field(
-        default="paraphrase-multilingual-MiniLM-L12-v2",
+        default="paraphrase-multilingual-mpnet-base-v2",
         description="Embedding model name (sentence-transformers or custom)"
     )
     EMBEDDING_PROVIDER: str = Field(
@@ -150,7 +166,7 @@ class Settings(BaseSettings):
         description="Embedding provider: 'sentence-transformers', 'ollama', 'openai'"
     )
     EMBEDDING_DIMENSION: int = Field(
-        default=384,
+        default=768,
         description="Embedding vector dimension"
     )
     # High-quality embedding models (alternatives)
@@ -172,6 +188,42 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = Field(
         default="",
         description="OpenAI API key for embeddings"
+    )
+    CHUNKING_STRATEGY: str = Field(
+        default="structure_aware",
+        description="Chunking strategy for indexing: structure_aware or sentence"
+    )
+    CHUNK_INCLUDE_TABLES: bool = Field(
+        default=True,
+        description="Include normalized table blocks as standalone chunks"
+    )
+    CHUNK_INCLUDE_EQUATIONS: bool = Field(
+        default=True,
+        description="Include normalized equation blocks as standalone chunks"
+    )
+    PDF_TEXT_LAYER_MIN_CHARS: int = Field(
+        default=40,
+        description="Minimum extracted chars on a sampled PDF page to treat it as text-bearing"
+    )
+    PDF_TEXT_LAYER_MIN_PAGE_RATIO: float = Field(
+        default=0.6,
+        description="Minimum ratio of sampled PDF pages with usable text to classify as digital"
+    )
+    PDF_ROUTING_SAMPLE_PAGES: int = Field(
+        default=5,
+        description="Maximum number of PDF pages sampled for text-layer routing"
+    )
+    PDF_MIXED_PAGE_OCR: bool = Field(
+        default=True,
+        description="When a PDF is mixed, run PaddleOCR on low-text pages after Docling"
+    )
+    PDF_MIXED_PAGE_MIN_TEXT_CHARS: int = Field(
+        default=80,
+        description="Minimum Docling-extracted chars on a PDF page before skipping mixed-page PaddleOCR"
+    )
+    STRICT_NEO4J: bool = Field(
+        default=True,
+        description="Require Neo4j-backed enrichment; if unavailable, enrichment fails hard"
     )
     
     # ==========================================================================
@@ -274,15 +326,15 @@ class Settings(BaseSettings):
     DEFAULT_DOCUMENT_TYPE: str = Field(default="general", description="Default document type for prompts")
     
     # File constraints
-    MAX_FILE_SIZE: int = Field(default=15 * 1024 * 1024, description="Max file size in bytes (15MB)")
+    MAX_FILE_SIZE: int = Field(default=50 * 1024 * 1024, description="Max file size in bytes (50MB)")
     ALLOWED_EXTENSIONS: List[str] = Field(
         default=[
             "pdf",
             "docx", "pptx", "xlsx",
             "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "gif",
-            "txt", "md", "csv", "html", "xhtml",
+            "txt", "md", "csv", "json", "rtf", "odt", "html", "xhtml",
         ],
-        description="Allowed file extensions (strict 17-type whitelist)"
+        description="Allowed file extensions"
     )
     
     # ==========================================================================

@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n';
 import { apiClient, type Document, type Category } from '@/lib/api';
 import type { AppOutletContext } from '@/App';
 import DocumentViewer, { FILE_INPUT_ACCEPT } from '@/components/common/DocumentViewer';
+import { validateFile } from '@/utils/file';
 
 // Upload progress state
 interface UploadState {
@@ -41,6 +42,7 @@ export default function KnowledgeBase() {
   const [processingDocs, setProcessingDocs] = useState<Set<string>>(new Set());
   const [processingDocsInfo, setProcessingDocsInfo] = useState<Map<string, Document>>(new Map());
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const processingDocsRef = useRef<Set<string>>(new Set());
 
   // --- New states for enhancements ---
   const [viewMode, setViewMode] = useState<'active' | 'archived'>('active');
@@ -93,6 +95,23 @@ export default function KnowledgeBase() {
   }, [downloadHistory]);
 
   // Download queue is ephemeral — no session persistence (downloads die on F5)
+
+  const getErrorMessage = (error: unknown) => {
+    if (error instanceof Error && error.message) return error.message;
+    if (typeof error === 'string') return error;
+    return t.common?.error || 'Error';
+  };
+
+  const saveBlobAsFile = (blob: Blob, filename: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  };
 
   // Debounced search
   useEffect(() => {
@@ -157,6 +176,10 @@ export default function KnowledgeBase() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    processingDocsRef.current = processingDocs;
+  }, [processingDocs]);
+
   // Prevent background scrolling when popovers or modals are active
   useEffect(() => {
     const contentArea = document.getElementById('kb-content-area');
@@ -195,11 +218,14 @@ export default function KnowledgeBase() {
   useEffect(() => {
     if (processingDocs.size > 0) {
       pollingRef.current = setInterval(async () => {
+        const docsToPoll = Array.from(processingDocsRef.current);
+        if (docsToPoll.length === 0) return;
+
         const stillProcessing = new Set<string>();
         const updatedInfo = new Map<string, Document>();
         let hasCompleted = false;
 
-        for (const docId of processingDocs) {
+        for (const docId of docsToPoll) {
           try {
             const doc = await apiClient.getDocument(docId);
             if (doc.status === 'NEW' || doc.status === 'INDEXING' || doc.status === 'processing') {
@@ -216,6 +242,7 @@ export default function KnowledgeBase() {
         if (hasCompleted) {
           loadData();
         } else {
+          processingDocsRef.current = stillProcessing;
           setProcessingDocs(stillProcessing);
           setProcessingDocsInfo(updatedInfo);
         }
@@ -242,27 +269,37 @@ export default function KnowledgeBase() {
     const key = docId;
     setDownloadQueue(prev => {
       const next = new Map(prev);
-      next.set(key, { name: realName, progress: 50, status: 'downloading' });
+      next.set(key, { name: realName, progress: 10, status: 'downloading' });
       return next;
     });
     try {
-      // Use attachment URL — forces browser to save file, not display it
-      const url = apiClient.getDocumentAttachmentUrl(docId);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = realName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      // Fetch first so failed/empty downloads do not get recorded as success.
+      const { blob, filename, mimeType } = await apiClient.downloadDocumentBlob(docId);
+      if (blob.size <= 0) {
+        throw new Error(t.kb?.downloadEmpty || 'Downloaded file is empty');
+      }
+      if (mimeType.includes('application/json')) {
+        const body = await blob.text().catch(() => '');
+        throw new Error(body || t.kb?.downloadFailed || 'Download failed');
+      }
 
       setDownloadQueue(prev => {
         const next = new Map(prev);
-        next.set(key, { name: realName, progress: 100, status: 'done' });
+        next.set(key, { name: realName, progress: 90, status: 'downloading' });
+        return next;
+      });
+
+      const verifiedName = filename && filename !== 'document' ? filename : realName;
+      saveBlobAsFile(blob, verifiedName);
+
+      setDownloadQueue(prev => {
+        const next = new Map(prev);
+        next.set(key, { name: verifiedName, progress: 100, status: 'done' });
         return next;
       });
       // Save to download history with REAL filename
-      setDownloadHistory(prev => [{ id: docId, name: realName, time: new Date() }, ...prev].slice(0, 50));
-      pushToast({ type: 'success', message: `${t.kb?.downloaded || 'Downloaded'}: ${realName}` });
+      setDownloadHistory(prev => [{ id: docId, name: verifiedName, time: new Date() }, ...prev].slice(0, 50));
+      pushToast({ type: 'success', message: `${t.kb?.downloaded || 'Downloaded'}: ${verifiedName}` });
       // Auto-remove from active queue after 3s
       setTimeout(() => {
         setDownloadQueue(prev => {
@@ -278,7 +315,7 @@ export default function KnowledgeBase() {
         next.set(key, { name: realName, progress: 0, status: 'error' });
         return next;
       });
-      pushToast({ type: 'error', message: `${t.kb?.downloadFailed || 'Download failed'}: ${realName}` });
+      pushToast({ type: 'error', message: `${t.kb?.downloadFailed || 'Download failed'}: ${realName} (${getErrorMessage(error)})` });
       // Auto-remove error from queue after 5s
       setTimeout(() => {
         setDownloadQueue(prev => {
@@ -295,11 +332,30 @@ export default function KnowledgeBase() {
     if (!workspaceId) return;
 
     const fileArray = Array.from(files);
-    const validFiles = fileArray.filter(f => f.size > 0);
-    const skippedCount = fileArray.length - validFiles.length;
+    const validFiles: File[] = [];
+    let skippedCount = 0;
+
+    for (const file of fileArray) {
+      if (file.size <= 0) {
+        skippedCount++;
+        continue;
+      }
+
+      const validation = validateFile(file);
+      if (!validation.valid) {
+        skippedCount++;
+        pushToast({ type: 'error', message: `${file.name}: ${validation.error}` });
+        continue;
+      }
+
+      validFiles.push(file);
+    }
 
     if (skippedCount > 0) {
-      pushToast({ type: 'error', message: t.kb?.emptyFileSkipped || `${skippedCount} empty file(s) skipped (0 bytes)` });
+      pushToast({
+        type: 'info',
+        message: `${skippedCount} file(s) skipped due to empty/invalid type/size`,
+      });
     }
 
     if (validFiles.length === 0) return;
@@ -329,15 +385,17 @@ export default function KnowledgeBase() {
 
         // Auto-assign to selected category if one is selected
         if (selectedCategory && selectedCategory !== 'uncategorized') {
-          apiClient.setDocumentCategory(doc.id, selectedCategory).catch(e =>
-            console.warn('Auto-assign category failed:', e)
-          );
+          apiClient.setDocumentCategory(doc.id, selectedCategory).catch(e => {
+            console.warn('Auto-assign category failed:', e);
+            pushToast({ type: 'error', message: `${t.kb?.autoAssignCategoryFailed || 'Auto-assign category failed'}: ${file.name}` });
+          });
         }
 
         // Fire-and-forget auto-categorize (DON'T await — this was causing 95% stuck!)
-        apiClient.categorizeDocument(doc.id).catch(e =>
-          console.warn('Auto-categorize pending:', e)
-        );
+        apiClient.categorizeDocument(doc.id).catch(e => {
+          console.warn('Auto-categorize pending:', e);
+          pushToast({ type: 'error', message: `${t.kb?.autoCategorizeFailed || 'Auto-categorize failed'}: ${file.name}` });
+        });
       } catch (error) {
         skipCount++;
         const rawMsg = error instanceof Error ? error.message : 'Upload failed';
@@ -382,7 +440,7 @@ export default function KnowledgeBase() {
         currentIndex: 0,
         totalFiles: 0,
         uploadPercent: 0,
-        stage: 'uploading',
+        stage: 'done',
       });
     }, 3000);
   };
@@ -418,7 +476,7 @@ export default function KnowledgeBase() {
         setDocuments(prev => prev.filter(d => d.id !== docId));
       } catch (error) {
         console.error('Delete failed:', error);
-        pushToast({ type: 'error', message: 'Delete failed' });
+        pushToast({ type: 'error', message: `${t.kb?.deleteFailed || 'Delete failed'}: ${getErrorMessage(error)}` });
       } finally {
         setDeletingDocIds(prev => {
           const next = new Set(prev);
@@ -431,9 +489,10 @@ export default function KnowledgeBase() {
   };
 
   // --- Batch delete handler ---
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     setShowBatchDeleteConfirm(false);
     const idsToDelete = Array.from(selectedDocIds);
+    if (idsToDelete.length === 0) return;
     // Immediately add all to deleting state
     setDeletingDocIds(prev => {
       const next = new Set(prev);
@@ -442,15 +501,17 @@ export default function KnowledgeBase() {
     });
     setSelectedDocIds(new Set());
 
-    // Fire-and-forget concurrent deletes
-    idsToDelete.forEach(docId => {
-      (async () => {
+    pushToast({ type: 'info', message: `${t.kb?.batchDeleting || 'Deleting documents...'} (${idsToDelete.length})` });
+
+    const results = await Promise.allSettled(
+      idsToDelete.map(async (docId) => {
         try {
           await apiClient.deleteDocument(docId);
           setDocuments(prev => prev.filter(d => d.id !== docId));
+          return { docId, ok: true };
         } catch (error) {
           console.error(`Batch delete failed for ${docId}:`, error);
-          pushToast({ type: 'error', message: t.kb?.batchDeleteFailed || 'Delete failed for a document' });
+          return { docId, ok: false, error };
         } finally {
           setDeletingDocIds(prev => {
             const next = new Set(prev);
@@ -458,12 +519,27 @@ export default function KnowledgeBase() {
             return next;
           });
         }
-      })();
-    });
+      })
+    );
 
-    pushToast({ type: 'info', message: t.kb?.batchDeleting || `Deleting ${idsToDelete.length} document(s)...` });
-    // Refresh after a short delay
-    setTimeout(() => loadData(), 2000);
+    const failed = results.filter(result =>
+      result.status === 'rejected' || (result.status === 'fulfilled' && !result.value.ok)
+    );
+    const successCount = idsToDelete.length - failed.length;
+
+    if (failed.length > 0) {
+      pushToast({
+        type: 'error',
+        message: `${t.kb?.batchDeleteFailed || 'Delete failed for a document'} (${failed.length}/${idsToDelete.length})`,
+      });
+    } else {
+      pushToast({
+        type: 'success',
+        message: `${t.kb?.batchDeleteSuccess || 'Documents deleted'} (${successCount})`,
+      });
+    }
+
+    await loadData();
   };
 
   // --- Toggle selection ---
@@ -492,8 +568,10 @@ export default function KnowledgeBase() {
     try {
       await apiClient.archiveDocument(docId);
       await loadData();
+      pushToast({ type: 'success', message: t.kb?.archiveSuccess || 'Document archived' });
     } catch (error) {
       console.error('Archive failed:', error);
+      pushToast({ type: 'error', message: `${t.kb?.archiveFailed || 'Archive failed'}: ${getErrorMessage(error)}` });
     }
   };
 
@@ -502,8 +580,10 @@ export default function KnowledgeBase() {
     try {
       await apiClient.restoreDocument(docId);
       await loadData();
+      pushToast({ type: 'success', message: t.kb?.restoreSuccess || 'Document restored' });
     } catch (error) {
       console.error('Restore failed:', error);
+      pushToast({ type: 'error', message: `${t.kb?.restoreFailed || 'Restore failed'}: ${getErrorMessage(error)}` });
     }
   };
 
@@ -532,8 +612,10 @@ export default function KnowledgeBase() {
       setNewCategoryDescription('');
       setShowCategoryModal(false);
       await loadData();
+      pushToast({ type: 'success', message: t.kb?.createCategorySuccess || 'Category created' });
     } catch (error) {
       console.error('Create category failed:', error);
+      pushToast({ type: 'error', message: `${t.kb?.createCategoryFailed || 'Create category failed'}: ${getErrorMessage(error)}` });
     }
   };
 
@@ -546,8 +628,10 @@ export default function KnowledgeBase() {
         setSelectedCategory(null);
       }
       await loadData();
+      pushToast({ type: 'success', message: t.kb?.deleteCategorySuccess || 'Category deleted' });
     } catch (error) {
       console.error('Delete category failed:', error);
+      pushToast({ type: 'error', message: `${t.kb?.deleteCategoryFailed || 'Delete category failed'}: ${getErrorMessage(error)}` });
     } finally {
       setDeletingCatId(null);
     }
@@ -561,8 +645,10 @@ export default function KnowledgeBase() {
       await apiClient.setDocumentCategory(docId, categoryId);
       setOpenCategoryDropdown(null);
       await loadData();
+      pushToast({ type: 'success', message: t.kb?.moveCategorySuccess || 'Document category updated' });
     } catch (error) {
       console.error('Move to category failed:', error);
+      pushToast({ type: 'error', message: `${t.kb?.moveCategoryFailed || 'Move to category failed'}: ${getErrorMessage(error)}` });
       await loadData();
     }
   };
@@ -821,8 +907,10 @@ export default function KnowledgeBase() {
                             ));
                           }
                           await loadData();
+                          pushToast({ type: 'success', message: t.kb?.refreshSummarySuccess || 'Summary refreshed' });
                         } catch (error) {
                           console.error('Refresh summary failed:', error);
+                          pushToast({ type: 'error', message: `${t.kb?.refreshSummaryFailed || 'Refresh summary failed'}: ${getErrorMessage(error)}` });
                           setCategories(prev => prev.map(c =>
                             c.id === selectedCategory ? { ...c, contentSummary: `❌ ${t.kb?.summaryFailed || 'Could not generate summary.'}` } : c
                           ));
@@ -859,7 +947,7 @@ export default function KnowledgeBase() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="ml-auto flex min-w-[5rem] items-center justify-end gap-2 pr-2">
             {/* Upload Queue Indicator */}
             {(uploadState.isUploading || processingDocsInfo.size > 0) && (
               <div className="relative">
@@ -936,13 +1024,13 @@ export default function KnowledgeBase() {
               <div className="relative">
                 <button
                   onClick={() => { setShowDownloadQueue(!showDownloadQueue); setShowUploadQueue(false); }}
-                  className="relative p-2 rounded-xl border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/50 transition"
+                  className="relative p-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15 transition"
                   title={t.kb?.downloadQueue || 'Download queue'}
                 >
                   <svg className="w-4 h-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-[10px] font-bold rounded-full flex items-center justify-center">
                     {downloadQueue.size}
                   </span>
                 </button>
@@ -953,7 +1041,7 @@ export default function KnowledgeBase() {
                     <div className="fixed inset-0 z-40" onClick={() => setShowDownloadQueue(false)} />
                     <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-xl border border-border bg-card shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
                       <div className="p-3 border-b border-border flex items-center gap-2">
-                        <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                         </svg>
                         <span className="text-sm font-medium">{t.kb?.downloadQueue || 'Download Queue'}</span>
@@ -968,7 +1056,7 @@ export default function KnowledgeBase() {
                               </span>
                             </div>
                             <div className="h-1 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full transition-all duration-300 ${info.status === 'done' ? 'bg-green-500' : info.status === 'error' ? 'bg-destructive' : 'bg-blue-500'}`} style={{ width: `${info.progress}%` }} />
+                              <div className={`h-full transition-all duration-300 ${info.status === 'done' ? 'bg-green-500' : info.status === 'error' ? 'bg-destructive' : 'bg-primary'}`} style={{ width: `${info.progress}%` }} />
                             </div>
                           </div>
                         ))}
@@ -980,7 +1068,7 @@ export default function KnowledgeBase() {
             )}
 
             {/* Upload Button */}
-            <label className={`cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold transition flex items-center gap-2 ${uploadState.isUploading
+            <label className={`hidden cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold transition items-center gap-2 ${uploadState.isUploading
               ? 'bg-primary/50 text-primary-foreground cursor-wait'
               : 'bg-primary text-primary-foreground hover:bg-primary/90'
               }`}>
@@ -1014,7 +1102,7 @@ export default function KnowledgeBase() {
             </label>
 
             {/* Download History Button (always visible) */}
-            <div className="relative">
+            <div className="hidden">
               <button
                 onClick={() => { setShowDownloadHistory(!showDownloadHistory); setShowUploadQueue(false); setShowDownloadQueue(false); }}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 transition text-sm font-medium"
@@ -1046,7 +1134,7 @@ export default function KnowledgeBase() {
                       {downloadHistory.length > 0 && (
                         <button
                           onClick={() => setDownloadHistory([])}
-                          className="text-[13px] text-muted-foreground hover:text-destructive transition"
+                          className="text-[12px] text-muted-foreground hover:text-destructive transition"
                         >
                           {t.common?.clearAll || 'Clear all'}
                         </button>
@@ -1054,7 +1142,7 @@ export default function KnowledgeBase() {
                     </div>
                     <div className="max-h-64 overflow-auto p-2 space-y-1">
                       {downloadHistory.length === 0 ? (
-                        <p className="text-xs text-muted-foreground text-center py-4">{t.kb?.noDownloads || 'No download history yet'}</p>
+                        <p className="text-[12px] text-muted-foreground text-center py-4">{t.kb?.noDownloads || 'No download history yet'}</p>
                       ) : (
                         downloadHistory.map((item, idx) => (
                           <div key={`${item.id}-${idx}`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/50 transition">
@@ -1062,8 +1150,8 @@ export default function KnowledgeBase() {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{item.name}</p>
-                              <p className="text-[12px] text-muted-foreground">
+                              <p className="text-[12px] font-medium truncate">{item.name}</p>
+                              <p className="text-[10px] text-muted-foreground">
                                 {item.time.toLocaleTimeString()} — {item.time.toLocaleDateString()}
                               </p>
                             </div>
@@ -1153,6 +1241,100 @@ export default function KnowledgeBase() {
               📦 {t.kb?.archivedDocuments || 'Archive'}
             </button>
           </div>
+
+          <label className={`cursor-pointer rounded-xl px-3 py-2 text-sm font-semibold transition flex items-center gap-2 whitespace-nowrap ${uploadState.isUploading
+            ? 'bg-primary/50 text-primary-foreground cursor-wait'
+            : 'bg-primary text-primary-foreground hover:bg-primary/90'
+            }`}>
+            <input
+              type="file"
+              multiple
+              accept={FILE_INPUT_ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) handleUpload(e.target.files);
+                e.target.value = '';
+              }}
+              disabled={uploadState.isUploading}
+            />
+            {uploadState.isUploading ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                {t.kb?.uploading || 'Uploading'}...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                {t.kb?.uploadAction || t.kb?.upload || 'Upload'}
+              </>
+            )}
+          </label>
+
+          <div className="relative">
+            <button
+              onClick={() => { setShowDownloadHistory(!showDownloadHistory); setShowUploadQueue(false); setShowDownloadQueue(false); }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15 transition text-sm font-semibold whitespace-nowrap"
+              title={t.kb?.downloadAction || t.kb?.downloadHistory || 'Downloads'}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              </svg>
+              {t.kb?.downloadAction || t.kb?.downloadHistory || 'Downloads'}
+              {downloadHistory.length > 0 && (
+                <span className="w-5 h-5 bg-primary text-primary-foreground text-[10px] font-bold rounded-full flex items-center justify-center">
+                  {downloadHistory.length}
+                </span>
+              )}
+            </button>
+
+            {showDownloadHistory && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowDownloadHistory(false)} />
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-border bg-card shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="p-3 border-b border-border flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                      </svg>
+                      <span className="text-sm font-medium">{t.kb?.downloadAction || t.kb?.downloadHistory || 'Downloads'}</span>
+                    </div>
+                    {downloadHistory.length > 0 && (
+                      <button
+                        onClick={() => setDownloadHistory([])}
+                        className="text-[12px] text-muted-foreground hover:text-destructive transition"
+                      >
+                        {t.common?.clearAll || 'Clear all'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-64 overflow-auto p-2 space-y-1">
+                    {downloadHistory.length === 0 ? (
+                      <p className="text-[12px] text-muted-foreground text-center py-4">{t.kb?.noDownloads || 'No downloads yet'}</p>
+                    ) : (
+                      downloadHistory.map((item, idx) => (
+                        <div key={`${item.id}-${idx}`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted/50 transition">
+                          <svg className="w-3.5 h-3.5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[12px] font-medium truncate">{item.name}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {item.time.toLocaleTimeString()} - {item.time.toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Batch Selection Toolbar */}
@@ -1170,7 +1352,7 @@ export default function KnowledgeBase() {
               />
               {selectedDocIds.size === filteredDocuments.length ? (t.kb?.deselectAll || 'Deselect all') : (t.kb?.selectAll || 'Select all')}
             </button>
-            <span className="text-sm text-muted-foreground">
+            <span className="text-[12px] text-muted-foreground">
               {selectedDocIds.size} {t.kb?.selected || 'selected'}
             </span>
             <div className="flex-1" />
@@ -1546,6 +1728,7 @@ export default function KnowledgeBase() {
           mimeType={viewDocMimeType}
           downloadUrl={apiClient.getDocumentDownloadUrl(viewDocId)}
           attachmentUrl={apiClient.getDocumentAttachmentUrl(viewDocId)}
+          fetchOriginalBlob={(signal) => apiClient.downloadDocumentBlob(viewDocId, signal)}
           fetchOcrText={() => apiClient.getDocumentContent(viewDocId)}
           onClose={closeDocViewer}
           t={t}

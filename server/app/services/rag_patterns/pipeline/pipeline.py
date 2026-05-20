@@ -573,10 +573,10 @@ class RAGPipeline:
     # LIGHTRAG INITIALIZATION
     # ========================================================================
 
-    async def _ensure_lightrag_initialized(self) -> Dict[str, Any]:
+    async def _ensure_lightrag_initialized(self, validate_parser: bool = True) -> Dict[str, Any]:
         """Ensure LightRAG instance is initialized."""
         try:
-            if not self._parser_installation_checked:
+            if validate_parser and not self._parser_installation_checked:
                 if not self.check_parser_installation():
                     error_msg = f"Parser '{self.config.parser}' is not properly installed."
                     self.logger.error(error_msg)
@@ -1457,12 +1457,15 @@ class RAGPipeline:
             self.logger.info(f"Document {file_path} processing complete!")
 
             return ProcessingResult(
-                doc_id=doc_id,
-                file_path=str(file_path),
-                text_content=text_content,
-                multimodal_items=multimodal_items,
-                content_list=content_list,
+                document_id=doc_id,
                 status=DocStatus.PROCESSED,
+                content=text_content,
+                metadata={
+                    "file_path": str(file_path),
+                    "multimodal_items_count": len(multimodal_items),
+                    "content_list_length": len(content_list),
+                },
+                processing_time_ms=doc_duration * 1000,
             )
 
         except Exception as e:
@@ -1497,7 +1500,9 @@ class RAGPipeline:
         Returns:
             ProcessingResult with processing details
         """
-        await self._ensure_lightrag_initialized()
+        init_result = await self._ensure_lightrag_initialized(validate_parser=False)
+        if not init_result.get("success"):
+            raise RuntimeError(init_result.get("error") or "LightRAG initialization failed")
 
         if display_stats is None:
             display_stats = getattr(self.config, "display_content_stats", False)
@@ -1546,12 +1551,14 @@ class RAGPipeline:
         self.logger.info(f"Content list insertion complete for: {file_path}")
 
         return ProcessingResult(
-            doc_id=doc_id,
-            file_path=file_path,
-            text_content=text_content,
-            multimodal_items=multimodal_items,
-            content_list=content_list,
+            document_id=doc_id,
             status=DocStatus.PROCESSED,
+            content=text_content,
+            metadata={
+                "file_path": file_path,
+                "multimodal_items_count": len(multimodal_items),
+                "content_list_length": len(content_list),
+            },
         )
 
     # ========================================================================

@@ -1,4 +1,9 @@
 """
+LEGACY ONLY: Surya OCR Engine retained for reference and fallback experiments.
+
+It is not part of the active upload flow, which routes production OCR through
+PaddleOCR and Docling.
+
 Surya OCR Engine - High-precision Computer Vision based OCR
 Uses Surya's Detection, Recognition, Layout analysis and Table Recognition
 for processing scanned PDFs, images, and scientific documents.

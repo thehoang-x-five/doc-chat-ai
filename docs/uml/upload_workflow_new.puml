@@ -1,0 +1,247 @@
+@startuml
+title Upload & Parsing Pipeline v3.2\n(Docling + PaddleOCR + LlamaIndex + Neo4j)
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontSize 11
+skinparam ArrowThickness 1.2
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #999999
+}
+skinparam activity {
+  BorderColor #666666
+  BackgroundColor #F7F7F7
+  DiamondBackgroundColor #FFF8DC
+  DiamondBorderColor #666666
+  StartColor #5C9EAD
+  EndColor #D1495B
+  BarColor #666666
+}
+
+start
+
+partition "Frontend" #F0F8FF {
+  :User uploads file;
+  :POST multipart/form-data\nto /api/v1/documents;
+}
+
+partition "FastAPI API" #FFF5EE {
+  :Validate file (type, size);
+  if (Valid?) then (Yes)
+    :Upload original → MinIO;
+    :Create **Document** (status=NEW);
+    :Create **DocumentVersion** (v=1, checksum);
+    :Dedup check (checksum_sha256);
+    if (Duplicate?) then (Yes)
+      :Delete placeholder + MinIO file;
+      :Return 400 "duplicate";
+      stop
+    else (No)
+    endif
+    :Create **Job** (type=OCR, status=QUEUED);
+    :Set Document.status = **INDEXING**;
+    :session.commit() **TRƯỚC** enqueue;
+    :process_ocr.apply_async(countdown=3);
+    :Return {document_id, status};
+  else (No)
+    :Return 400 "invalid file";
+    stop
+  endif
+}
+
+partition "Celery OCR Worker" #F5FFF5 {
+  :Receive OCR task (job_id, version_id);
+  :Load DocumentVersion + Document;
+  if (CANCELED / DELETED?) then (Yes)
+    :Job.status = DONE (canceled);
+    stop
+  else (No)
+  endif
+  :Document.status = INDEXING (progress=5%);
+  :Download file from MinIO → temp;
+  :Detect file extension;
+  
+  partition "Stage 1 — Parser Router" #FFFFF0 {
+    if (Extension ∈ {.txt, .md, .csv, .html}) then (Route 0)
+      :Direct text read\n(UTF-8 decode);
+      :parser_used = "direct";
+      note right
+        Không cần OCR/AI.
+        Đọc trực tiếp nội dung text.
+      end note
+    else (Không phải text thuần)
+    endif
+    
+    if (parser_used == null\nAND should_use_paddleocr()\n== True) then (Route 1)
+      :**PaddleOCREngine** (PPStructureV3)\nlayout → Markdown;
+      :parser_used = "paddleocr";
+      note right
+        Kích hoạt cho:
+        ✅ .jpg .png .webp .tiff .bmp
+        ✅ config.parser == "paddleocr"
+        ✅ PDF + USE_PADDLEOCR_FOR_PDF=true
+        
+        ❌ Nếu PaddleOCR fail → **RuntimeError**
+        **(KHÔNG có engine nào fallback)**
+      end note
+    else (PaddleOCR không match)
+    endif
+    
+    if (parser_used == null) then (Route 2)
+      :**DocumentEngine** (Docling)\nStructural → Markdown + JSON;
+      :parser_used = "docling";
+      
+      :Detect embedded images;
+      if (Embedded images?) then (Yes)
+        if (PaddleOCR available?) then (Yes)
+          :**PaddleOCR Sub-OCR**\n(process_crops per embedded image);
+          :Append text → fullText + markdown;
+          :parser_used = "docling+paddleocr";
+        else (No engine)
+          :Skip sub-OCR\n(log warning, Docling text only);
+        endif
+      else (No)
+      endif
+      
+      if (DOCX with images?) then (Yes)
+        :DOCX inline image OCR\n(parse OOXML → extract media\n→ **PaddleOCR** per image);
+        :Rebuild text with inline\n[Image Text: ...] at correct positions;
+      else (No)
+      endif
+      
+      note right
+        Hỗ trợ: .pdf .docx .xlsx .pptx
+        Docling → DoclingDocument
+        → Markdown + structured layout
+        Runtime note:
+        .xlsx requires InputFormat.XLSX
+        in DocumentEngine.allowed_formats.
+        
+        **Sub-OCR = PaddleOCR only**
+        (Surya đã bị loại hoàn toàn)
+      end note
+    else (Không)
+    endif
+  }
+  
+  partition "Stage 1.5 — Normalize + Quality Gate" #FFF0F5 {
+    :normalize_parser_output()\n→ content_list (RAG-Anything format)\n+ stats (chars, words, pages);
+    :quality_check(min_chars=50);
+    
+    if (Quality OK?) then (Pass ✅)
+    else (Fail ❌)
+      :Document.status = **FAILED**;
+      :Job.status = ERROR;
+      :Return {status: "failed"};
+      stop
+    endif
+  }
+  
+  partition "Stage 3 — Store & Fork" #F0FFF0 {
+    :Upload **text.txt** → MinIO;
+    :Upload **content.md** → MinIO;
+    :Upload **structured.json** → MinIO\n(gồm content_list + parser_used + stats);
+    
+    :Tạo **Job(INDEX)** → queue "index";
+    if (ENABLE_RAGANYTHING_PARSING?) then (Yes)
+      :Tạo **Job(ENRICHMENT)** → queue "enrichment";
+    else (No)
+    endif
+    :session.commit();
+    :process_index.delay();
+    if (enrichment_job?) then (Yes)
+      :process_enrichment.delay();
+    else (No)
+    endif
+    :Job(OCR).status = **DONE**;
+  }
+}
+
+fork
+
+partition "Celery INDEX Worker" #E6F3FF {
+  :Load content.md from MinIO;
+  :**ChunkingService.chunk_by_sentences()**\n↳ LlamaIndex SentenceSplitter\n  (chunk_size=512, overlap=50)\n  paragraph_separator="\\n\\n"\n  secondary_regex="[.!?]\\s+";
+  :**EmbeddingService.embed_batch()**\n↳ SentenceTransformer\n  model=paraphrase-multilingual-mpnet-base-v2\n  dim=768 native (không pad zero);
+  :DELETE old chunks (nếu re-index);
+  :INSERT Chunk rows + embeddings\n→ pgvector (Vector(768));
+  if (STRICT_NEO4J?) then (Yes)
+    :Document.status = **INDEXING**\nprogress=95\nwaiting for Neo4j enrichment;
+  else (No)
+    :Document.status = **READY_BASIC**;
+  endif
+  :Job(INDEX).status = DONE;
+  note right
+    Người dùng có thể
+    Chat/Search ngay!
+    (Vector + BM25)
+  end note
+}
+
+fork again
+
+partition "Celery ENRICHMENT Worker" #FFF0E6 {
+  :Load structured.json from MinIO;
+  :Extract content_list;
+  :initialize_raganything()\n↳ LightRAG(**graph_storage="Neo4JStorage"**)\n  Neo4j URI = bolt://neo4j:7687\n  + llm_func + embedding_func;
+  :rag_pipeline.insert_content_list()\n→ Entity + Relation extraction\n→ **Knowledge Graph → Neo4j**;
+  if (Enrichment OK?) then (Yes)
+    :Document.status = **READY_ENRICHED**;
+  else (No)
+    if (STRICT_NEO4J?) then (Yes)
+      :Document.status = **FAILED**\nafter retries;
+    else (No)
+      :Stay at READY_BASIC\n(non-blocking failure);
+    endif
+  endif
+  :Job(ENRICHMENT).status = DONE;
+  note right
+    Bo sung Graph RAG
+    **Vector + BM25 + Graph (Neo4j)**
+    
+    Non-strict fail: doc van search duoc
+    Strict fail: doc FAILED de bao loi Neo4j
+  end note
+}
+
+end fork
+
+partition "Search API" #F0F0FF {
+  :User gửi câu hỏi;
+  :Filter docs status ∈ {READY, READY_BASIC, READY_ENRICHED};
+  :Vector search (pgvector cosine distance)\n+ BM25 keyword search;
+  if (READY_ENRICHED?) then (Yes)
+    :+ **Graph RAG retrieval**\n  (LightRAG aquery → Neo4j);
+  else (No)
+  endif
+  :RRF Fusion → Rerank → Return\nranked chunks + citations;
+}
+
+stop
+
+' ==============================================================================
+' ARCHITECTURE SUMMARY (v3.1)
+' ==============================================================================
+' Engines:
+'   OCR     = PaddleOCR PPStructureV3 (ONLY — no Surya)
+'   Parser  = Docling (digital docs) + PaddleOCR (images)
+'   Sub-OCR = PaddleOCR process_crops (embedded images in Docling results)
+'
+' Index Pipeline:
+'   Chunking  = LlamaIndex SentenceSplitter (sentence-aware, 512 tokens)
+'   Embedding = SentenceTransformers paraphrase-multilingual-mpnet-base-v2 (768d)
+'   Storage   = pgvector Vector(768) in PostgreSQL
+'
+' Enrichment Pipeline:
+'   Framework = LightRAG (lightrag-hku)
+'   Graph DB  = Neo4j 5 (bolt://neo4j:7687)
+'   Storage   = Neo4JStorage (via lightrag.kg.neo4j_impl)
+'
+' Dependencies (requirements-extra.txt):
+'   paddleocr>=3.0.0, paddlepaddle>=3.0.0
+'   llama-index-core>=0.10.0
+'   neo4j>=5.14.0
+' ==============================================================================
+
+@enduml

@@ -343,6 +343,7 @@ class MineruParser(BaseParser):
             file_path = Path(file_path)
             if not file_path.exists():
                 return ProcessingResult(
+                    document_id=str(file_path),
                     status=DocStatus.FAILED,
                     error=f"File not found: {file_path}"
                 )
@@ -359,29 +360,35 @@ class MineruParser(BaseParser):
                 content_list = await self._parse_text_file(file_path, **kwargs)
             else:
                 return ProcessingResult(
+                    document_id=str(file_path),
                     status=DocStatus.FAILED,
                     error=f"Unsupported format: {ext}"
                 )
             
             return ProcessingResult(
-                status=DocStatus.COMPLETED,
-                content=content_list,
+                document_id=str(file_path),
+                status=DocStatus.PROCESSED,
+                content="", # Miners store content in JSON via content_list
+                chunks=content_list, # Actually it was returning 'content' which isn't a string list. I will map it to chunks. Wait, content is string according to types.py! Let me just put it in metadata.
                 metadata={
                     "parser": "mineru",
                     "file_path": str(file_path),
-                    "file_type": ext
+                    "file_type": ext,
+                    "content_list": content_list
                 }
             )
             
         except MineruExecutionError as e:
             self.logger.error(f"MinerU execution failed: {e}")
             return ProcessingResult(
+                document_id="error",
                 status=DocStatus.FAILED,
                 error=str(e)
             )
         except Exception as e:
             self.logger.error(f"MinerU parsing failed: {e}", exc_info=True)
             return ProcessingResult(
+                document_id="error",
                 status=DocStatus.FAILED,
                 error=str(e)
             )
@@ -664,6 +671,7 @@ class DoclingParser(BaseParser):
             file_path = Path(file_path)
             if not file_path.exists():
                 return ProcessingResult(
+                    document_id=str(file_path),
                     status=DocStatus.FAILED,
                     error=f"File not found: {file_path}"
                 )
@@ -678,6 +686,7 @@ class DoclingParser(BaseParser):
                 content_list = await self._parse_html(file_path, **kwargs)
             else:
                 return ProcessingResult(
+                    document_id=str(file_path),
                     status=DocStatus.FAILED,
                     error=f"Unsupported format: {ext}. "
                           f"Docling supports: PDF, Office ({', '.join(self.OFFICE_FORMATS)}), "
@@ -685,18 +694,21 @@ class DoclingParser(BaseParser):
                 )
             
             return ProcessingResult(
-                status=DocStatus.COMPLETED,
-                content=content_list,
+                document_id=str(file_path),
+                status=DocStatus.PROCESSED,
+                content="",
                 metadata={
                     "parser": "docling",
                     "file_path": str(file_path),
-                    "file_type": ext
+                    "file_type": ext,
+                    "content_list": content_list
                 }
             )
             
         except Exception as e:
             self.logger.error(f"Docling parsing failed: {e}", exc_info=True)
             return ProcessingResult(
+                document_id="error",
                 status=DocStatus.FAILED,
                 error=str(e)
             )
@@ -1047,7 +1059,10 @@ class ParserFactory:
             return DoclingParser(config)
         elif parser_type == "auto":
             config = config or RAGConfig.from_server_settings()
-            return ParserFactory.create_parser(config.parser, config)
+            configured_parser = (config.parser or "docling").lower()
+            if configured_parser == "auto":
+                configured_parser = "docling"
+            return ParserFactory.create_parser(configured_parser, config)
         else:
             raise ValueError(f"Unknown parser type: {parser_type}")
     

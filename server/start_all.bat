@@ -6,7 +6,7 @@ echo.
 
 :: Start Celery Worker in new window
 echo Starting Celery Worker...
-start "Celery Worker" cmd /k "cd /d %~dp0 && .venv\Scripts\activate && celery -A app.queue.celery_app worker -Q ocr,index,convert,default -l info -P solo"
+start "Celery Worker" cmd /k "cd /d %~dp0 && .venv\Scripts\activate && celery -A app.queue.celery_app worker -Q ocr,index,convert,default,enrichment -l info -P solo"
 
 :: Wait a moment for Celery to start
 timeout /t 3 /nobreak > nul

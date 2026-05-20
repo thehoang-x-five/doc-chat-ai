@@ -3,9 +3,10 @@ OCR processing task — Super RAG Pipeline (Chained Ensemble).
 
 Flow:
   Stage 1 — Structural Extraction
-    • Images / Scanned PDFs  → SuryaEngine  (full-page vision OCR)
+    • Images / Scanned PDFs  → PaddleOCREngine (PPStructureV3 layout → Markdown)
     • Digital PDFs / DOCX    → DocumentEngine (Docling layout parser)
-      └─ If Docling detects embedded images → Surya Sub-OCR on each crop
+      └─ If Docling detects embedded images → PaddleOCR Sub-OCR on each crop
+    • NO fallback — PaddleOCR is required. If unavailable, task fails immediately.
 
   Stage 2 — Semantic Enrichment (if ENABLE_RAGANYTHING_PARSING)
     • Pass clean content_list into RAGAnything → Knowledge Graph
@@ -13,8 +14,10 @@ Flow:
   Stage 3 — Standard Vector Indexing
     • Queue JobType.INDEX → ChunkingService → EmbeddingService → pgvector
 """
+import asyncio
 from uuid import UUID
 from pathlib import Path
+from typing import Any, Dict, List
 from celery import shared_task
 from celery.utils.log import get_task_logger
 from sqlalchemy import create_engine, select
@@ -29,6 +32,31 @@ logger = get_task_logger(__name__)
 _sync_engine = None
 _SyncSession = None
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".bmp", ".gif"}
+
+
+def _safe_enhanced_text(original_text: str, enhanced_text: str | None) -> str | None:
+    """Use AI-enhanced text only when it did not drop a meaningful amount."""
+    if not enhanced_text:
+        return None
+
+    original_len = len(original_text.strip())
+    enhanced_len = len(enhanced_text.strip())
+    if original_len == 0:
+        return enhanced_text
+
+    min_len = int(original_len * 0.95)
+    if enhanced_len < min_len:
+        logger.warning(
+            "[Stage1] Ignoring AI-enhanced text because it is shorter than source "
+            "(original=%s chars, enhanced=%s chars)",
+            original_len,
+            enhanced_len,
+        )
+        return None
+
+    return enhanced_text
+
 
 def _get_sync_session():
     """Get or create module-level cached sync session factory."""
@@ -41,6 +69,189 @@ def _get_sync_session():
         _sync_engine = create_engine(db_url, echo=False, pool_pre_ping=True)
         _SyncSession = sessionmaker(bind=_sync_engine, autocommit=False, autoflush=False)
     return _SyncSession()
+
+
+def _load_pdf_page_images(file_path: Path) -> List[Any]:
+    """Render PDF pages to images for targeted mixed-page OCR."""
+    try:
+        from pdf2image import convert_from_path
+
+        return convert_from_path(str(file_path), dpi=200)
+    except Exception as exc:
+        logger.warning(
+            "[Stage1] pdf2image page rendering unavailable for %s: %s",
+            file_path.name,
+            exc,
+        )
+
+    try:
+        import fitz
+        from PIL import Image as PILImage
+
+        images: List[Any] = []
+        with fitz.open(str(file_path)) as pdf_doc:
+            for page in pdf_doc:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                images.append(
+                    PILImage.frombytes(
+                        "RGB",
+                        [pix.width, pix.height],
+                        pix.samples,
+                    )
+                )
+        return images
+    except Exception as exc:
+        logger.warning(
+            "[Stage1] PyMuPDF page rendering unavailable for %s: %s",
+            file_path.name,
+            exc,
+        )
+        return []
+
+
+def _decode_text_bytes(file_content: bytes) -> str:
+    """Decode text-like uploads with a conservative encoding fallback."""
+    try:
+        return file_content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return file_content.decode("latin-1", errors="ignore")
+
+
+def _extract_rtf_text(file_content: bytes) -> str:
+    """Best-effort plain text extraction from RTF without external deps."""
+    import re
+
+    text = _decode_text_bytes(file_content)
+    text = re.sub(r"\\par[d]?", "\n", text)
+    text = re.sub(r"\\tab", "\t", text)
+    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
+    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", text)
+    text = re.sub(r"[{}]", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _extract_odt_text(file_content: bytes) -> str:
+    """Extract visible text from an OpenDocument Text file."""
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(io.BytesIO(file_content)) as archive:
+        xml_data = archive.read("content.xml")
+
+    root = ET.fromstring(xml_data)
+    paragraphs: List[str] = []
+    for elem in root.iter():
+        if elem.tag.endswith("}p") or elem.tag.endswith("}h"):
+            text = "".join(elem.itertext()).strip()
+            if text:
+                paragraphs.append(text)
+    return "\n\n".join(paragraphs).strip()
+
+
+def _extract_direct_text(file_content: bytes, file_ext: str) -> str:
+    """Extract text for formats handled without OCR/Docling."""
+    if file_ext == ".rtf":
+        return _extract_rtf_text(file_content)
+    if file_ext == ".odt":
+        return _extract_odt_text(file_content)
+
+    text = _decode_text_bytes(file_content)
+    if file_ext == ".json":
+        try:
+            import json
+
+            return json.dumps(json.loads(text), ensure_ascii=False, indent=2)
+        except Exception:
+            return text
+    return text
+
+
+def _extract_image_text_tesseract(file_path: Path) -> str:
+    """Extract image text with the system Tesseract binary as a lightweight fallback."""
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "tesseract",
+            str(file_path),
+            "stdout",
+            "-l",
+            "vie+eng",
+            "--psm",
+            "6",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(
+            f"Tesseract failed with code {result.returncode}: {stderr[:500]}"
+        )
+    return (result.stdout or "").strip()
+
+
+def _extract_mixed_pdf_page_ocr(
+    file_path: Path,
+    docling_pages: List[Dict[str, Any]],
+    paddle_engine: Any,
+) -> List[Dict[str, Any]]:
+    """OCR only the low-text pages of a mixed PDF using PaddleOCR."""
+    from app.core.config import settings
+
+    min_chars = max(
+        int(settings.PDF_TEXT_LAYER_MIN_CHARS),
+        int(settings.PDF_MIXED_PAGE_MIN_TEXT_CHARS),
+    )
+    candidate_pages: List[int] = []
+    for page in docling_pages or []:
+        page_number = page.get("page")
+        if not isinstance(page_number, int) or page_number < 1:
+            continue
+        page_text = (page.get("text") or "").strip()
+        if len(page_text) < min_chars:
+            candidate_pages.append(page_number)
+
+    if not candidate_pages:
+        return []
+
+    page_images = _load_pdf_page_images(file_path)
+    if not page_images:
+        raise RuntimeError(
+            f"Mixed PDF page OCR required for {file_path.name} but page rendering failed"
+        )
+
+    page_results: List[Dict[str, Any]] = []
+    page_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(page_loop)
+    try:
+        for page_number in candidate_pages:
+            page_idx = page_number - 1
+            if page_idx >= len(page_images):
+                continue
+            ocr_text = page_loop.run_until_complete(
+                paddle_engine.ocr_image(page_images[page_idx])
+            )
+            ocr_text = (ocr_text or "").strip()
+            if not ocr_text:
+                continue
+            page_results.append(
+                {
+                    "type": "text",
+                    "page_idx": page_idx,
+                    "page_number": page_number,
+                    "section_title": f"Scanned Page {page_number}",
+                    "text": ocr_text,
+                }
+            )
+    finally:
+        page_loop.close()
+        asyncio.set_event_loop(None)
+
+    return page_results
 
 
 @shared_task(
@@ -81,9 +292,11 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
             ).scalar_one_or_none()
 
             if job:
+                config = {**(job.config_json or {}), **config}
                 job.status = JobStatus.RUNNING
                 job.step = "initializing"
                 job.progress = 0
+                job.error_message = None
                 session.commit()
 
             # ── Load document version ─────────────────────────────────
@@ -152,9 +365,46 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                 structured_json = {}
                 page_count = 1
                 language = config.get("language", "auto")
+                mixed_page_markdown_appendix = ""
+                routing_metadata = {
+                    "input_extension": tmp_path.suffix.lower(),
+                    "parser_override": config.get("parser"),
+                    "pdf_content_type": None,
+                    "routing_decision": None,
+                    "sub_ocr_used": False,
+                    "mixed_page_ocr_used": False,
+                    "mixed_page_ocr_pages": [],
+                }
 
-                # ── Route 0: Direct Text (TXT / MD / CSV / HTML / XHTML) ──
-                DIRECT_TEXT_EXTENSIONS = {'.txt', '.md', '.csv', '.html', '.xhtml'}
+                if tmp_path.suffix.lower() == ".pdf":
+                    from app.core.engines.pdf_routing import detect_pdf_content_type
+
+                    if config.get("parser") == "paddleocr":
+                        routing_metadata["pdf_content_type"] = "forced_paddleocr"
+                        routing_metadata["routing_decision"] = "forced_paddleocr"
+                    elif config.get("parser") == "docling":
+                        routing_metadata["pdf_content_type"] = "forced_docling"
+                        routing_metadata["routing_decision"] = "forced_docling"
+                    else:
+                        pdf_routing = detect_pdf_content_type(tmp_path)
+                        routing_metadata.update(pdf_routing)
+                        config["pdf_content_type"] = pdf_routing.get("content_type")
+                        routing_metadata["routing_decision"] = (
+                            "scanned_pdf_paddleocr"
+                            if pdf_routing.get("content_type") == "scanned"
+                            else "digital_pdf_docling"
+                            if pdf_routing.get("content_type") == "digital"
+                            else "mixed_pdf_docling_plus_paddle_page_ocr"
+                        )
+                        logger.info(
+                            "[Stage1] PDF routing decided: %s",
+                            routing_metadata["routing_decision"],
+                        )
+
+                # ── Route 0: Direct Text (TXT / MD / CSV / JSON / RTF / ODT / HTML / XHTML) ──
+                DIRECT_TEXT_EXTENSIONS = {
+                    '.txt', '.md', '.csv', '.json', '.rtf', '.odt', '.html', '.xhtml'
+                }
                 if tmp_path.suffix.lower() in DIRECT_TEXT_EXTENSIONS:
                     logger.info(f"[Stage1] Route 0: Direct text read for {tmp_path.suffix}")
                     update_doc_progress(
@@ -162,9 +412,11 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                         "Reading text file directly...",
                     )
                     try:
-                        full_text = file_content.decode("utf-8", errors="ignore")
+                        full_text = _extract_direct_text(file_content, tmp_path.suffix.lower())
                         markdown_text = full_text
-                        structured_json = {}
+                        structured_json = {
+                            "source_format": tmp_path.suffix.lower().lstrip("."),
+                        }
                         page_count = 1
                         parser_used = "direct"
                         logger.info(
@@ -173,57 +425,101 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                     except Exception as e:
                         logger.warning(f"[Stage1] Direct text read failed: {e}")
 
-                # ── Route 1: SuryaEngine (images / scanned PDFs) ──────
+                # ── Route 1: PaddleOCREngine (images / scanned PDFs) ──────
                 try:
-                    from app.core.engines.surya_engine import (
-                        should_use_surya, SuryaEngine, SURYA_AVAILABLE,
+                    from app.core.engines.paddleocr_engine import (
+                        should_use_paddleocr, PaddleOCREngine, PADDLEOCR_AVAILABLE,
                     )
 
-                    if should_use_surya(tmp_path, config):
-                        logger.info(f"[Stage1] Routing to SuryaEngine for {tmp_path.suffix}")
+                    if should_use_paddleocr(tmp_path, config):
+                        routing_metadata["routing_decision"] = (
+                            routing_metadata["routing_decision"]
+                            or ("image_paddleocr" if tmp_path.suffix.lower() != ".pdf" else "pdf_paddleocr")
+                        )
+                        logger.info(f"[Stage1] Routing to PaddleOCREngine for {tmp_path.suffix}")
                         update_doc_progress(
                             session, doc_version.document, 25,
-                            "Surya OCR (vision AI)...",
+                            "PaddleOCR (PPStructureV3 layout)...",
                         )
 
                         import asyncio
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
 
-                        engine = SuryaEngine()
-                        surya_result = loop.run_until_complete(
+                        engine = PaddleOCREngine()
+                        paddle_result = loop.run_until_complete(
                             engine.process_document(
                                 job_id=job_id,
                                 file_path=tmp_path,
                                 settings_dict={
-                                    "parser": "surya",
-                                    "parse_method": "vision_ocr",
+                                    "parser": "paddleocr",
+                                    "parse_method": "pp_structurev3",
                                     "language": language,
                                 },
                             )
                         )
                         loop.close()
 
-                        ocr_result = surya_result.get("result", {})
+                        ocr_result = paddle_result.get("result", {})
                         full_text = ocr_result.get("fullText", "")
                         markdown_text = ocr_result.get("markdownText", full_text)
                         structured_json = ocr_result.get("structured", {})
                         page_count = ocr_result.get("meta", {}).get("pageCount", 1)
                         language = ocr_result.get("meta", {}).get("language", "auto")
-                        parser_used = "surya"
+                        parser_used = "paddleocr"
 
                         logger.info(
-                            f"[Stage1] SuryaEngine OK: {len(full_text)} chars, "
+                            f"[Stage1] PaddleOCREngine OK: {len(full_text)} chars, "
                             f"{page_count} pages"
                         )
 
                 except ImportError as e:
-                    logger.warning(f"Surya not available: {e}")
+                    logger.error(f"PaddleOCR not available: {e}")
+                    raise RuntimeError(
+                        f"PaddleOCR is REQUIRED but not installed: {e}. "
+                        f"Please add paddlepaddle and paddleocr to requirements-extra.txt and rebuild."
+                    ) from e
                 except Exception as e:
-                    logger.error(f"SuryaEngine failed: {e}, falling back")
-                    # If file is an image, Docling fallback won't help — retry instead
-                    if file_ext.lower() in {'.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif', '.bmp', '.gif'}:
-                        raise RuntimeError(f"Surya OCR failed for image {tmp_path.name}: {e}") from e
+                    logger.error(f"PaddleOCREngine failed: {e}")
+                    if tmp_path.suffix.lower() in IMAGE_EXTENSIONS:
+                        logger.warning(
+                            "[Stage1] Falling back to Tesseract for image %s after PaddleOCR failure",
+                            tmp_path.name,
+                        )
+                        update_doc_progress(
+                            session,
+                            doc_version.document,
+                            30,
+                            "Tesseract image OCR fallback...",
+                        )
+                        try:
+                            full_text = _extract_image_text_tesseract(tmp_path)
+                            markdown_text = full_text
+                            structured_json = {
+                                "source_format": tmp_path.suffix.lower().lstrip("."),
+                                "parser": "tesseract",
+                                "fallback_from": "paddleocr",
+                                "paddleocr_error": str(e),
+                            }
+                            page_count = 1
+                            parser_used = "tesseract"
+                            routing_metadata["routing_decision"] = "image_tesseract_fallback"
+                            logger.info(
+                                "[Stage1] Tesseract fallback OK: %s chars",
+                                len(full_text),
+                            )
+                        except Exception as fallback_error:
+                            logger.error(
+                                "Tesseract fallback failed for %s: %s",
+                                tmp_path.name,
+                                fallback_error,
+                            )
+                            raise RuntimeError(
+                                f"PaddleOCR failed for {tmp_path.name}: {e}; "
+                                f"Tesseract fallback also failed: {fallback_error}"
+                            ) from fallback_error
+                    else:
+                        raise RuntimeError(f"PaddleOCR failed for {tmp_path.name}: {e}") from e
 
                 # ── Route 2: Docling (digital PDFs / DOCX / XLSX …) ──
                 if parser_used is None:
@@ -255,7 +551,10 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
 
                         ocr_result = docling_result.get("result", {})
                         original_text = ocr_result.get("fullText", "")
-                        enhanced_text = ocr_result.get("enhancedText")
+                        enhanced_text = _safe_enhanced_text(
+                            original_text,
+                            ocr_result.get("enhancedText"),
+                        )
 
                         full_text = enhanced_text if enhanced_text else original_text
                         markdown_text = (
@@ -268,7 +567,7 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                         language = ocr_result.get("meta", {}).get("language", "auto")
                         parser_used = "docling"
 
-                        # ── Nested OCR: Surya sub-image extraction ────
+                        # ── Nested OCR: PaddleOCR sub-image extraction ────
                         embedded_images = structured_json.get("images", [])
                         if not embedded_images:
                             # Also check layout blocks for image-type regions
@@ -283,55 +582,116 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                             "page_height": lp.get("height", 1),
                                         })
 
-                        if embedded_images and SURYA_AVAILABLE:
+                        _sub_ocr_available = False
+                        _sub_ocr_engine = None
+                        _sub_ocr_label = "paddleocr"
+                        try:
+                            from app.core.engines.paddleocr_engine import PaddleOCREngine as _SubEngine, PADDLEOCR_AVAILABLE as _SUB_AVAIL
+                            if _SUB_AVAIL:
+                                _sub_ocr_available = True
+                                _sub_ocr_engine = _SubEngine()
+                                _sub_ocr_label = "paddleocr"
+                        except ImportError:
+                            pass
+                        if not _sub_ocr_available:
+                            logger.warning(
+                                "[Stage1] PaddleOCR sub-OCR engine not available. "
+                                "Embedded images will be skipped."
+                            )
+
+                        mixed_page_ocr_results = []
+                        if (
+                            tmp_path.suffix.lower() == ".pdf"
+                            and config.get("pdf_content_type") == "mixed"
+                            and settings.PDF_MIXED_PAGE_OCR
+                        ):
+                            if not _sub_ocr_available or _sub_ocr_engine is None:
+                                raise RuntimeError(
+                                    "Mixed PDF requires PaddleOCR page OCR but PaddleOCR is unavailable"
+                                )
+
+                            docling_pages = ocr_result.get("pages", [])
+                            mixed_page_ocr_results = _extract_mixed_pdf_page_ocr(
+                                tmp_path,
+                                docling_pages,
+                                _sub_ocr_engine,
+                            )
+                            if mixed_page_ocr_results:
+                                routing_metadata["sub_ocr_used"] = True
+                                routing_metadata["mixed_page_ocr_used"] = True
+                                routing_metadata["mixed_page_ocr_pages"] = [
+                                    item["page_number"] for item in mixed_page_ocr_results
+                                ]
+                                structured_json["mixed_page_ocr"] = mixed_page_ocr_results
+
+                                mixed_page_text = "\n\n".join(
+                                    item["text"] for item in mixed_page_ocr_results if item.get("text")
+                                )
+                                if mixed_page_text:
+                                    full_text += (
+                                        "\n\n--- Mixed PDF Page OCR ---\n"
+                                        f"{mixed_page_text}"
+                                    )
+                                    mixed_page_markdown_appendix = "\n\n".join(
+                                        (
+                                            f"### Scanned Page {item['page_number']}\n\n{item['text']}"
+                                        )
+                                        for item in mixed_page_ocr_results
+                                        if item.get("text")
+                                    )
+                                    parser_used = "docling+paddleocr"
+                                    logger.info(
+                                        "[Stage1] Mixed PDF page OCR recovered %s chars across pages %s",
+                                        len(mixed_page_text),
+                                        routing_metadata["mixed_page_ocr_pages"],
+                                    )
+                            else:
+                                logger.info(
+                                    "[Stage1] Mixed PDF route selected, but no low-text pages required PaddleOCR"
+                                )
+
+                        if embedded_images and _sub_ocr_available and _sub_ocr_label == "paddleocr":
+                            routing_metadata["sub_ocr_used"] = True
                             logger.info(
                                 f"[Stage1] Nested OCR: {len(embedded_images)} "
-                                f"embedded images detected — routing to Surya"
+                                f"embedded images detected — routing to PaddleOCR"
                             )
                             update_doc_progress(
                                 session, doc_version.document, 35,
-                                f"Surya sub-OCR ({len(embedded_images)} images)...",
+                                f"PaddleOCR sub-OCR ({len(embedded_images)} images)...",
                             )
 
                             # Load page images from file for cropping
                             try:
-                                # Force GC to free Docling memory before loading Surya
                                 import gc
                                 gc.collect()
-                                
-                                from app.core.engines.surya_engine import SuryaEngine
-                                from surya.input.load import load_from_file as surya_load
-                                page_images, _ = surya_load(str(tmp_path))
 
-                                surya_engine = SuryaEngine()
-                                # Use lightweight mode: only load detection+recognition
-                                # (skip layout+table_rec to save ~40% memory)
-                                surya_engine._ensure_initialized(lightweight=True)
+                                from PIL import Image as PILImage
+                                page_images = []
+                                if tmp_path.suffix.lower() == '.pdf':
+                                    page_images = _load_pdf_page_images(tmp_path)
+                                else:
+                                    page_images = [PILImage.open(str(tmp_path)).convert("RGB")]
+
+                                paddle_engine = _sub_ocr_engine
                                 sub_loop = asyncio.new_event_loop()
                                 asyncio.set_event_loop(sub_loop)
 
                                 sub_ocr_texts = []
-                                # Group crops by page
                                 crops_by_page = {}
                                 for img_info in embedded_images:
-                                    pg = img_info.get("page", 1) - 1  # 0-indexed
+                                    pg = img_info.get("page", 1) - 1
                                     bbox = img_info.get("bbox", {})
                                     abs_bbox = None
                                     
                                     if isinstance(bbox, dict):
                                         if "x1" in bbox:
-                                            # Absolute pixel bbox from Docling PictureItem
-                                            abs_bbox = [
-                                                bbox["x1"], bbox["y1"],
-                                                bbox["x2"], bbox["y2"],
-                                            ]
+                                            abs_bbox = [bbox["x1"], bbox["y1"], bbox["x2"], bbox["y2"]]
                                         elif "x" in bbox and "width" in bbox:
-                                            # Normalized bbox from layout blocks
                                             pw = img_info.get("page_width", 1)
                                             ph = img_info.get("page_height", 1)
                                             abs_bbox = [
-                                                bbox["x"] * pw,
-                                                bbox["y"] * ph,
+                                                bbox["x"] * pw, bbox["y"] * ph,
                                                 (bbox["x"] + bbox["width"]) * pw,
                                                 (bbox["y"] + bbox["height"]) * ph,
                                             ]
@@ -340,18 +700,11 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                     
                                     if not abs_bbox:
                                         continue
-                                        
                                     width = abs_bbox[2] - abs_bbox[0]
                                     height = abs_bbox[3] - abs_bbox[1]
-                                    
-                                    # Heuristic: Skip decorative images (tiny icons, bullets, tiny logos)
                                     if width < 50 or height < 50:
-                                        logger.debug(f"Skipping tiny image {width}x{height} on page {pg+1}")
                                         continue
-                                        
-                                    # Heuristic: Skip highly skewed aspect ratios (likely dividers, separator lines)
                                     if height > 0 and (width / height > 15 or height / width > 15):
-                                        logger.debug(f"Skipping skewed image {width}x{height} on page {pg+1}")
                                         continue
                                     
                                     if pg not in crops_by_page:
@@ -361,7 +714,7 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                 for pg_idx, crops in crops_by_page.items():
                                     if pg_idx < len(page_images):
                                         text = sub_loop.run_until_complete(
-                                            surya_engine.process_crops(
+                                            paddle_engine.process_crops(
                                                 crops, page_images[pg_idx]
                                             )
                                         )
@@ -383,19 +736,25 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                         f"{len(embedded_images)} images"
                                     )
 
-                                parser_used = "docling+surya"
+                                parser_used = "docling+paddleocr"
 
                             except Exception as sub_e:
                                 logger.warning(
-                                    f"[Stage1] Sub-OCR failed: {sub_e}, "
+                                    f"[Stage1] PaddleOCR Sub-OCR failed: {sub_e}, "
                                     f"continuing with Docling text only."
                                 )
-                                
-                        elif tmp_path.suffix.lower() == ".docx" and SURYA_AVAILABLE:
+
+                        elif embedded_images and not _sub_ocr_available:
+                            logger.warning(
+                                f"[Stage1] {len(embedded_images)} embedded images detected "
+                                f"but PaddleOCR sub-OCR is not available. Skipping image OCR."
+                            )
+
+                        elif tmp_path.suffix.lower() == ".docx" and _sub_ocr_available:
                             # ── Position-aware DOCX image OCR ──
                             # Parse the DOCX XML to find images in their correct
                             # paragraph positions and insert OCR text inline.
-                            logger.info("[Stage1] DOCX inline image OCR: parsing XML structure...")
+                            logger.info(f"[Stage1] DOCX inline image OCR (via {_sub_ocr_label}): parsing XML structure...")
                             import zipfile
                             import io
                             import xml.etree.ElementTree as ET
@@ -419,39 +778,43 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                         logger.info(f"[Stage1] Found {len(rid_to_media)} image refs in DOCX rels")
 
                                         # 2. Pre-OCR all unique media files
-                                        from app.core.engines.surya_engine import SuryaEngine
                                         from PIL import Image
-                                        surya_engine = SuryaEngine()
-                                        surya_engine._ensure_initialized(lightweight=True)
 
-                                        media_ocr_cache = {}  # media_path → ocr text
+                                        if _sub_ocr_label == "paddleocr":
+                                            paddle_eng = _sub_ocr_engine
+                                            docx_loop = asyncio.new_event_loop()
+                                            asyncio.set_event_loop(docx_loop)
+
+                                        media_ocr_cache = {}
                                         for rid, media_path in rid_to_media.items():
                                             if media_path in media_ocr_cache:
                                                 continue
                                             try:
                                                 img_data = docx_zip.read(media_path)
                                                 pil_img = Image.open(io.BytesIO(img_data)).convert("RGB")
-                                                res = surya_engine._recognition_predictor(
-                                                    [pil_img],
-                                                    det_predictor=surya_engine._detection_predictor,
-                                                    highres_images=None
-                                                )
-                                                texts = []
-                                                for r in res:
-                                                    for line in getattr(r, "text_lines", []):
-                                                        if line.text.strip():
-                                                            texts.append(line.text)
-                                                media_ocr_cache[media_path] = "\n".join(texts) if texts else ""
+
+                                                if _sub_ocr_label == "paddleocr":
+                                                    ocr_text = docx_loop.run_until_complete(
+                                                        paddle_eng.ocr_image(pil_img)
+                                                    )
+                                                    media_ocr_cache[media_path] = ocr_text
+                                                else:
+                                                    logger.warning(
+                                                        f"PaddleOCR not available for DOCX inline image OCR. "
+                                                        f"Skipping image: {media_path}"
+                                                    )
+                                                    media_ocr_cache[media_path] = ""
                                             except Exception as e:
                                                 logger.warning(f"Failed to OCR {media_path}: {e}")
                                                 media_ocr_cache[media_path] = ""
 
-                                        # 3. Walk document.xml paragraphs in order,
-                                        #    inserting image OCR text at the correct position
+                                        if _sub_ocr_label == "paddleocr":
+                                            docx_loop.close()
+
+                                        # 3. Walk document.xml paragraphs in order
                                         doc_xml = docx_zip.read("word/document.xml")
                                         doc_root = ET.fromstring(doc_xml)
 
-                                        # XML namespaces used in OOXML
                                         ns = {
                                             "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
                                             "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -460,30 +823,26 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                             "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
                                         }
 
-                                        # Find all paragraphs inside <w:body>
                                         body = doc_root.find(".//w:body", ns)
                                         if body is None:
                                             body = doc_root
 
-                                        inline_parts = []  # list of text chunks in reading order
+                                        inline_parts = []
                                         img_count = 0
 
                                         for elem in body:
                                             tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
 
                                             if tag == "p":
-                                                # Extract plain text from this paragraph
                                                 para_texts = []
                                                 for t_elem in elem.iter(f"{{{ns['w']}}}t"):
                                                     if t_elem.text:
                                                         para_texts.append(t_elem.text)
                                                 para_str = "".join(para_texts).strip()
 
-                                                # Check if this paragraph contains any drawings
                                                 drawings = list(elem.iter(f"{{{ns['w']}}}drawing"))
                                                 img_texts_in_para = []
                                                 for drawing in drawings:
-                                                    # Find <a:blip r:embed="rIdX">
                                                     for blip in drawing.iter(f"{{{ns['a']}}}blip"):
                                                         embed_rid = blip.get(f"{{{ns['r']}}}embed")
                                                         if embed_rid and embed_rid in rid_to_media:
@@ -493,15 +852,12 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                                                 img_count += 1
                                                                 img_texts_in_para.append(ocr_text)
 
-                                                # Build the paragraph output
                                                 if para_str:
                                                     inline_parts.append(para_str)
-                                                # Insert image OCR text RIGHT AFTER the paragraph text
                                                 for it in img_texts_in_para:
                                                     inline_parts.append(f"[Image Text: {it}]")
 
                                             elif tag == "tbl":
-                                                # Tables: extract text from all cells
                                                 tbl_texts = []
                                                 for t_elem in elem.iter(f"{{{ns['w']}}}t"):
                                                     if t_elem.text:
@@ -510,26 +866,25 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                                                     inline_parts.append(" | ".join(tbl_texts))
 
                                         if img_count > 0:
-                                            # Rebuild full_text and markdown_text with inline image text
                                             rebuilt = "\n\n".join(inline_parts)
                                             full_text = rebuilt
                                             markdown_text = rebuilt
                                             logger.info(
-                                                f"[Stage1] DOCX inline OCR: inserted {img_count} "
-                                                f"image(s) text at correct positions, "
-                                                f"total {len(full_text)} chars"
+                                                f"[Stage1] DOCX inline OCR ({_sub_ocr_label}): inserted {img_count} "
+                                                f"image(s), total {len(full_text)} chars"
                                             )
-                                            parser_used = "docling+surya"
+                                            parser_used = f"docling+{_sub_ocr_label}"
+                                            routing_metadata["sub_ocr_used"] = True
                                         else:
                                             logger.info("[Stage1] DOCX images had no extractable text")
 
                             except Exception as e:
                                 logger.warning(f"[Stage1] Failed DOCX inline image OCR: {e}", exc_info=True)
                         else:
-                            if embedded_images:
+                            if embedded_images and not _sub_ocr_available:
                                 logger.info(
                                     f"[Stage1] {len(embedded_images)} images "
-                                    f"found but Surya unavailable, skipping sub-OCR"
+                                    f"found but no OCR engine available, skipping sub-OCR"
                                 )
 
                         logger.info(
@@ -537,22 +892,20 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                             f"{page_count} pages"
                         )
 
-                    except ImportError:
-                        logger.warning("Docling not available, using plaintext fallback")
-                        full_text = file_content.decode("utf-8", errors="ignore")
-                        markdown_text = full_text
-                        structured_json = {}
-                        page_count = 1
-                        parser_used = "plaintext"
+                    except ImportError as e:
+                        logger.error("Docling not available: %s", e)
+                        raise RuntimeError(
+                            f"Docling is REQUIRED for {tmp_path.suffix.lower()} files but is not installed: {e}"
+                        ) from e
                     except Exception as e:
                         logger.error(f"Docling parsing failed: {e}")
-                        full_text = file_content.decode("utf-8", errors="ignore")
-                        markdown_text = full_text
-                        structured_json = {}
-                        page_count = 1
-                        parser_used = "plaintext"
+                        raise RuntimeError(
+                            f"Docling failed for {tmp_path.name}: {e}"
+                        ) from e
 
                 logger.info(f"[Stage1] Parser used: {parser_used}")
+                if parser_used and not routing_metadata["routing_decision"]:
+                    routing_metadata["routing_decision"] = f"{parser_used}_default"
 
                 # ==========================================================
                 #  STAGE 1.5 — Normalize + Quality Gate
@@ -593,6 +946,17 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                     }
 
                 logger.info("[Stage1.5] Quality gate PASSED")
+
+                if mixed_page_markdown_appendix:
+                    markdown_text += (
+                        "\n\n---\n\n## Mixed PDF PaddleOCR Recovery\n\n"
+                        f"{mixed_page_markdown_appendix}"
+                    )
+
+                if settings.STRICT_NEO4J and not settings.ENABLE_RAGANYTHING_PARSING:
+                    raise RuntimeError(
+                        "STRICT_NEO4J requires ENABLE_RAGANYTHING_PARSING=true"
+                    )
 
                 # ==========================================================
                 #  STAGE 3 — Store outputs & queue Vector Indexing
@@ -643,6 +1007,7 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
 
                 json_key = f"outputs/{workspace_id}/{doc_id}/v{version}/structured.json"
                 structured_json["parser_used"] = parser_used
+                structured_json["routing"] = routing_metadata
                 structured_json["content_list"] = normalized.get("content_list", [])
                 structured_json["detected_language"] = normalized.get("language", language)
                 structured_json["normalize_stats"] = normalized.get("stats", {})
@@ -672,6 +1037,12 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                 doc_version.structured_json_key = json_key
                 doc_version.page_count = page_count
                 doc_version.language_detected = normalized.get("language", language)
+                doc_version.parser = parser_used or doc_version.parser
+                doc_version.parse_method = (
+                    "pp_structurev3"
+                    if parser_used == "paddleocr"
+                    else config.get("parse_method", "auto")
+                )
 
                 # Queue INDEX job (Stage 3 — Vector Indexing)
                 index_job = Job(
@@ -751,6 +1122,7 @@ def process_ocr(self, job_id: str, document_version_id: str, config: dict = None
                     job.status = JobStatus.DONE
                     job.step = "completed"
                     job.progress = 100
+                    job.error_message = None
                     session.commit()
 
                 logger.info(

@@ -22,6 +22,7 @@ logger = get_task_logger(__name__)
 # Module-level sync engine cache
 _sync_engine = None
 _SyncSession = None
+_worker_event_loop = None
 
 
 def _get_sync_session():
@@ -35,6 +36,17 @@ def _get_sync_session():
         _sync_engine = create_engine(db_url, echo=False, pool_pre_ping=True)
         _SyncSession = sessionmaker(bind=_sync_engine, autocommit=False, autoflush=False)
     return _SyncSession()
+
+
+def _get_worker_event_loop():
+    """Reuse one asyncio loop per Celery worker process for LightRAG shared locks."""
+    global _worker_event_loop
+    import asyncio
+
+    if _worker_event_loop is None or _worker_event_loop.is_closed():
+        _worker_event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_event_loop)
+    return _worker_event_loop
 
 
 @shared_task(
@@ -63,6 +75,7 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
 
     logger.info(f"[Enrichment] Starting job {job_id} for version {document_version_id}")
     config = config or {}
+    strict_neo4j = bool(config.get("strict_neo4j", settings.STRICT_NEO4J))
 
     try:
         with _get_sync_session() as session:
@@ -75,6 +88,7 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                 job.status = JobStatus.RUNNING
                 job.step = "initializing"
                 job.progress = 0
+                job.error_message = None
                 session.commit()
 
             # Load document version
@@ -127,6 +141,7 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                     job.status = JobStatus.DONE
                     job.step = "skipped_no_content"
                     job.progress = 100
+                    job.error_message = None
                     session.commit()
                 return {"status": "skipped", "reason": "no_content"}
 
@@ -182,10 +197,8 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                 from app.services.core.rag.factory import initialize_raganything
                 from app.services.core.embedding_service import get_embedding_service
                 from app.services.infrastructure.ai_providers.manager import AIProviderManager
-                import asyncio
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                loop = _get_worker_event_loop()
 
                 working_dir = settings.STORAGE_DIR / "rag_storage"
                 ai_manager = AIProviderManager()
@@ -218,22 +231,61 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                         job.progress = 50
                         session.commit()
 
+                    graph_backend = getattr(
+                        rag_pipeline,
+                        "_graph_backend",
+                        "disabled" if getattr(rag_pipeline, "lightrag", None) is None else "unknown",
+                    )
+                    if strict_neo4j and graph_backend != "neo4j":
+                        raise RuntimeError(
+                            f"STRICT_NEO4J requires Neo4j but graph backend resolved to {graph_backend}"
+                        )
+
                     enrichment_result = loop.run_until_complete(
                         rag_pipeline.insert_content_list(
                             content_list=content_list,
                             file_path=file_ref,
-                            doc_id=None,  # auto-generate
+                            doc_id=str(doc_version.id),
                         )
                     )
 
                     rag_doc_id = (
-                        enrichment_result.doc_id
+                        enrichment_result.document_id
                         if enrichment_result
                         else None
                     )
+                    rag_status = {}
+                    if rag_doc_id and hasattr(rag_pipeline, "get_document_processing_status"):
+                        rag_status = loop.run_until_complete(
+                            rag_pipeline.get_document_processing_status(rag_doc_id)
+                        )
+
+                    if strict_neo4j:
+                        raw_status = rag_status.get("raw_status") or {}
+                        status_obj = rag_status.get("status") or raw_status.get("status") or ""
+                        status_value = (
+                            str(status_obj.value)
+                            if hasattr(status_obj, "value")
+                            else str(status_obj)
+                        )
+                        status_value = status_value.lower()
+                        error_msg = (
+                            rag_status.get("error")
+                            or raw_status.get("error_msg")
+                            or raw_status.get("error")
+                            or ""
+                        )
+                        if not rag_status.get("exists") or status_value != "processed":
+                            raise RuntimeError(
+                                "STRICT_NEO4J enrichment did not complete in LightRAG "
+                                f"(doc_id={rag_doc_id}, status={status_value or 'missing'}"
+                                f"{f', error={error_msg[:240]}' if error_msg else ''})"
+                            )
 
                     # Store the RAGAnything doc_id back into structured.json
                     structured_json["raganything_doc_id"] = rag_doc_id
+                    structured_json["graph_backend"] = graph_backend
+                    structured_json["raganything_status"] = rag_status
                     storage.upload(
                         json_key,
                         json.dumps(structured_json).encode("utf-8"),
@@ -241,20 +293,27 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                     )
 
                     logger.info(
-                        f"[Enrichment] RAGAnything OK (doc_id={rag_doc_id})"
+                        f"[Enrichment] RAGAnything OK (doc_id={rag_doc_id}, graph_backend={graph_backend})"
                     )
                     enrichment_success = True
                 else:
+                    if strict_neo4j:
+                        raise RuntimeError(
+                            "STRICT_NEO4J requires RAGPipeline.insert_content_list but it is unavailable"
+                        )
                     logger.warning(
                         "[Enrichment] RAGPipeline missing insert_content_list, "
                         "skipping enrichment"
                     )
-
-                loop.close()
-
             except ImportError as e:
+                if strict_neo4j:
+                    raise RuntimeError(
+                        f"STRICT_NEO4J requires RAGAnything/Neo4j but imports failed: {e}"
+                    ) from e
                 logger.warning(f"[Enrichment] RAGAnything not available: {e}")
             except Exception as e:
+                if strict_neo4j:
+                    raise
                 logger.error(
                     f"[Enrichment] RAGAnything enrichment failed: {e}",
                     exc_info=True,
@@ -268,6 +327,10 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                 doc_version.document.processing_progress = 100
                 doc_version.document.processing_step = "Enrichment complete"
             elif doc_version.document:
+                if strict_neo4j:
+                    raise RuntimeError(
+                        "STRICT_NEO4J requires enrichment success, but enrichment did not succeed"
+                    )
                 # Leave at READY_BASIC — still searchable via Vector+BM25
                 logger.info(
                     "[Enrichment] Enrichment did not succeed, "
@@ -281,6 +344,7 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                 job.status = JobStatus.DONE
                 job.step = "completed"
                 job.progress = 100
+                job.error_message = None
                 session.commit()
 
             logger.info(f"[Enrichment] Job {job_id} completed successfully")
@@ -288,6 +352,9 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
 
     except Exception as e:
         logger.error(f"[Enrichment] Job {job_id} failed: {e}", exc_info=True)
+        current_retries = getattr(getattr(self, "request", None), "retries", 0)
+        max_retries = getattr(self, "max_retries", 0)
+        will_retry = current_retries < max_retries
 
         try:
             with _get_sync_session() as session:
@@ -297,12 +364,28 @@ def process_enrichment(self, job_id: str, document_version_id: str, config: dict
                 if job:
                     job.status = JobStatus.ERROR
                     job.error_message = str(e)
-                    session.commit()
-
-                # NOTE: Do NOT set document to FAILED here.
-                # Document is already READY_BASIC and searchable.
-                # Enrichment failure is non-critical.
+                dv = session.execute(
+                    select(DocumentVersion)
+                    .options(joinedload(DocumentVersion.document))
+                    .where(DocumentVersion.id == UUID(document_version_id))
+                ).unique().scalar_one_or_none()
+                if dv and dv.document and strict_neo4j:
+                    if will_retry:
+                        dv.document.status = DocumentStatus.INDEXING
+                        dv.document.processing_progress = 95
+                        dv.document.processing_step = (
+                            f"Retrying strict Neo4j enrichment ({current_retries + 1}/{max_retries})"
+                        )
+                    else:
+                        dv.document.status = DocumentStatus.FAILED
+                        dv.document.processing_progress = 100
+                        dv.document.processing_step = (
+                            f"Strict Neo4j enrichment failed: {str(e)[:160]}"
+                        )
+                session.commit()
         except Exception:
             pass
 
-        raise self.retry(exc=e)
+        if will_retry:
+            raise self.retry(exc=e)
+        raise

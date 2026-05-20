@@ -1,63 +1,65 @@
-# RAG-Anything Upload Pipeline (Architecture v2.0)
+# Upload Pipeline v3.2 — Architecture
 
-Tài liệu này giải thích chi tiết flow xử lý tài liệu (upload & processing pipeline) mới được refactor. Kiến trúc mới chuyển từ cơ chế xử lý đồng bộ tuyến tính (monolithic) sang xử lý bất đồng bộ, chia thành nhiều worker độc lập giúp tăng tốc độ xử lý, tránh blocking và đảm bảo chất lượng trích xuất dữ liệu.
+> **Cập nhật**: v3.2 (2026-05-16) — XLSX Docling input is enabled in `DocumentEngine.allowed_formats`; LightRAG `parser=auto` recursion is fixed; PaddleOCR is the only active OCR/sub-OCR path; Surya is legacy-only.  
+> **Về v2.0 cũ**: Xem lịch sử git cho bản Surya-based trước đó.
 
 ---
 
-## 1. Flow Sơ Đồ (Architecture Diagram)
-
-Sơ đồ dưới đây mô tả quá trình từ lúc người dùng submit file cho đến khi dữ liệu sẵn sàng cho Chat/Search.
+## 1. Flow Tổng Quan (Architecture Diagram)
 
 ```mermaid
 graph TD
     %% Tầng API & Storage
     User([Người dùng]) -->|1. Upload File| API(Documents API)
-    API -->|2. Validate (Type, Size)| Validator{Hợp lệ?}
+    API -->|2. Validate Type/Size/Checksum| Validator{Hợp lệ?}
     Validator -->|Không| Reject[Báo lỗi 400]
     Validator -->|Có| MinIO[(MinIO Storage)]
     
     %% Tầng Database
-    MinIO -->|3. Lưu bản gốc| DB[(Database: PostgreSQL)]
-    DB -->|4. Tạo Document: NEW| DocV[Tạo Document Version]
-    DocV -->|5. Cập nhật Status: INDEXING| JobQ[Tạo Job: OCR_QUEUED]
+    MinIO -->|3. Lưu bản gốc| DB[(PostgreSQL)]
+    DB -->|4. Tạo Document NEW + Version + Dedup| DocV[Tạo DocumentVersion v1]
+    DocV -->|5. Status → INDEXING| JobQ[Tạo Job OCR QUEUED]
     
-    %% Tầng OCR Worker (Queue: ocr, convert)
-    JobQ -->|6. Enqueue OCR| CeleryOCR((Celery OCR Worker))
-    CeleryOCR -->|7. Phân tích loại file| Router{Parser Router}
+    %% Celery OCR Worker
+    JobQ -->|6. commit → enqueue| CeleryOCR((Celery OCR Worker))
+    CeleryOCR -->|7. Detect file type| Router{Parser Router}
     
-    Router -->|Route 0: .txt, .md, .csv| ParserDirect[Direct Text Parser]
-    Router -->|Route 1: Image, .pdf có flag, config| ParserSurya[Surya Engine<br>OCR chuyên sâu]
-    Router -->|Route 2: Default, Office| ParserDocling[Docling Engine<br>Structural Extraction]
+    Router -->|Route 0: .txt .md .csv .html| ParserDirect[Direct Text Parser]
+    Router -->|Route 1: Image / Forced| ParserPaddle[PaddleOCR Engine<br>PPStructureV3 → Markdown]
+    Router -->|Route 2: Default| ParserDocling[Docling Engine<br>Structural Extraction]
     
-    ParserDirect --> Normalize[Bước 8: Normalize Module<br>Chuẩn hóa Schema]
-    ParserSurya --> Normalize
+    ParserDocling -->|Sub-OCR embedded images| SubOCR{PaddleOCR Sub-OCR}
+    SubOCR -.->|Nếu PaddleOCR unavailable| SubSkip[Skip sub-OCR<br>log warning]
+    
+    ParserDirect --> Normalize[Bước 8: Normalize Module<br>Canonical content_list]
+    ParserPaddle --> Normalize
     ParserDocling --> Normalize
     
-    Normalize -->|9. Kiểm tra chất lượng| QGate{Quality Gate}
-    QGate -->|Rỗng hoặc Dưới Threshold| Fail[Document FAILED]
-    QGate -->|Pass| Split[Bước 10: Tách luồng (Fork)]
+    Normalize -->|9. Quality Gate min_chars=50| QGate{Quality Gate}
+    QGate -->|Rỗng / Dưới Threshold| Fail[Document FAILED]
+    QGate -->|Pass| Split[Bước 10: Fork luồng]
     
-    %% Tầng Async Workers song song
-    Split -->|File Markdown + JSON| CeleryIndex((Celery INDEX Worker))
-    Split -->|JSON + Content_list| CeleryEnrich((Celery ENRICHMENT Worker))
+    %% Async Workers song song
+    Split -->|content.md| CeleryIndex((INDEX Worker))
+    Split -->|structured.json + content_list| CeleryEnrich((ENRICHMENT Worker))
     
     %% Nhánh 1: Indexing
-    subgraph Vector RAG nhánh
-        CeleryIndex -->|Chunking| Chunk[Cắt văn bản]
-        Chunk -->|Embedding API| Embed[Vectorise]
-        Embed -->|Lưu pgvector| PGVector[(PGVectorDB)]
-        PGVector -->|11a. Cập nhật Status| ReadyBasic[Trạng thái: READY_BASIC<br>Có thể Search RAG!]
+    subgraph Vector RAG
+        CeleryIndex -->|chunk_by_sentences| Chunk[LlamaIndex SentenceSplitter<br>chunk_size=512 overlap=50]
+        Chunk -->|embed_batch| Embed[SentenceTransformer<br>mpnet-base-v2 dim=768]
+        Embed -->|pgvector INSERT| PGVector[(pgvector Vector 768)]
+        PGVector -->|Status Update| ReadyBasic[READY_BASIC<br>or INDEXING 95 if STRICT_NEO4J]
     end
     
-    %% Nhánh 2: Enrichment (Graph RAG)
-    subgraph Graph RAG nhánh
-        CeleryEnrich -->|Khởi tạo RAGAnything| RAGA[Graph Pipeline]
-        RAGA -->|Trích xuất Entities, Relations| LLM[LLM Processing]
-        LLM -->|Lưu Neo4j/LightRAG| GraphDB[(Knowledge Graph)]
-        GraphDB -->|11b. Cập nhật Status| ReadyEnriched[Trạng thái: READY_ENRICHED<br>Hoàn thành Semantic Graph!]
+    %% Nhánh 2: Enrichment
+    subgraph Graph RAG
+        CeleryEnrich -->|insert_content_list| RAGA[RAGAnything Pipeline]
+        RAGA -->|Entity + Relation| LLM[LLM Processing]
+        LLM -->|Neo4j/LightRAG| GraphDB[(Knowledge Graph)]
+        GraphDB -->|Status Update| ReadyEnriched[READY_ENRICHED<br>Full Graph!]
     end
 
-    %% Tầng RAG Search (Hybrid)
+    %% Search
     ReadyBasic -.-> Hybrid[Hybrid Retriever]
     ReadyEnriched -.-> Hybrid
     User -->|Chat/Search| Hybrid
@@ -65,10 +67,14 @@ graph TD
     classDef worker fill:#f9f,stroke:#333,stroke-width:2px;
     classDef db fill:#bbf,stroke:#333,stroke-width:2px;
     classDef status fill:#cfc,stroke:#333,stroke-width:2px;
+    classDef engine fill:#ffd,stroke:#666,stroke-width:1px;
+    classDef legacy fill:#eee,stroke:#999,stroke-width:1px,stroke-dasharray: 5 5;
     
     class CeleryOCR,CeleryIndex,CeleryEnrich worker;
     class DB,MinIO,PGVector,GraphDB db;
     class ReadyBasic,ReadyEnriched,Fail status;
+    class ParserPaddle,ParserDocling,ParserDirect engine;
+    class SubSkip legacy;
 ```
 
 ---
@@ -76,63 +82,111 @@ graph TD
 ## 2. Giải thích chi tiết các bước
 
 ### Bước 1-5: Tiếp nhận (Ingestion)
-1. **API Upload**: `app/api/v1/documents.py` nhận file. File được validate kích thước và định dạng tệp (whitelist extensions).
-2. **Storage**: File gốc được tải lên MinIO/S3 object storage thông qua `ObjectStore`.
-3. **Database Records**: Cập nhật vào PosgreSQL:
-   - Tạo 1 đối tượng `Document` (status mặc định là `NEW`).
-   - Tạo 1 `DocumentVersion` để quản lý versioning (giữ original_file_key).
-   - Tạo 1 đối tượng `Job` với type=`OCR`.
-4. **Thay đổi trạng thái**: Document chuyển sang `INDEXING`. Tác vụ OCR được đưa vào hàng đợi `ocr` của Celery. Chuyển token cho client để kết thúc request HTTP (Xử lý non-blocking).
 
-### Bước 6-8: Trích xuất Dữ liệu (Parsing & Extraction)
-OCR worker (`celery-worker-ocr`) nhận job:
-1. Load nội dung file từ MinIO lên temp memory.
-2. Tại `surya_engine.py`, hàm **Parser Router** quyết định xem engine nào sẽ xử lý:
-   - **Route 0 (Trực tiếp)**: Nếu file là dạng raw text (`.txt`, `.md`, `.csv`, `.json`), bỏ qua AI, đọc nội dung trực tiếp vì file không cần nhận dạng layout.
-   - **Route 1 (Deep CV/Surya OCR)**: Khi file là hình ảnh (`.jpg`, `.png`), hoặc có tuỳ chọn Force-Surya từ config. Surya dùng Neural Nets để nhận dạng văn bản trong ảnh/scan, tốc độ chậm nhưng chính xác với văn bản khó.
-   - **Route 2 (Docling Structural Extraction)**: Route mặc định cho các file tài liệu số (`.pdf`, `.docx`, `.xlsx`,...). Docling thực hiện chuyển đổi cấu trúc tài liệu sang định dạng DoclingDocument để trích xuất Markdown/JSON trung thực nhất với layout gốc.
-3. Sau khi Parsers trả kết quả (dù đi bằng đường nào), dữ liệu thô sẽ qua module **`normalize.py`** (Normalize). Module này sẽ ép kiểu tất cả kết quả về 1 định dạng duy nhất `content_list` chuẩn của thư viện RAG-Anything (chứa block text, image, table caption, math formula...).
+1. **API Upload**: `app/api/v1/documents.py` nhận file qua multipart/form-data hoặc presigned URL.
+2. **Validate**: Kiểm tra tên file (whitelist extensions), kích thước (limit), MIME type.
+3. **MinIO Storage**: File gốc được upload lên MinIO/S3 object storage qua `ObjectStore`.
+4. **Database Records**: PostgreSQL:
+   - Tạo `Document` (status=`NEW`)
+   - Tạo `DocumentVersion` (v=1, checksum_sha256)
+   - **Dedup check**: So sánh SHA-256 với tất cả version trong workspace → reject nếu trùng
+   - Tạo `Job` (type=`OCR`, status=`QUEUED`)
+5. **Trạng thái**: Document → `INDEXING`. **Commit DB trước, enqueue Celery sau** (đảm bảo worker đọc được data).
 
-### Bước 9: Kiểm duyệt nội dung (Quality Gate)
-- Module **Quality Gate** kiểm tra xem lượng chữ (chars) có trên 50 ký tự hay không.
-- Nếu Parser chạy xong mà text xuất ra bị rỗng (hoặc chỉ toàn rác), tài liệu bị đánh dấu `FAILED` và luồng kết thúc ngay lập tức, báo lỗi cho người dùng. Điều này ngăn DB bị rác.
+### Bước 6-8: Parsing & Extraction (Stage 1)
 
-### Bước 10+11: Tách luồng (Pipeline Fork)
-Đây là thay đổi cốt lõi nhất. Thay vì Worker OCR tự làm nốt các bước (gây nghẽn mạng và treo hàng đợi), ta chia công việc ra làm 2 nhiệm vụ chạy song song:
+OCR Worker (`celery-worker-ocr`) nhận job:
 
-1. **INDEX Worker** (nhanh, bắt buộc): 
-   - Hàm `index.py` sử dụng nội dung văn bản (Markdown/Text) để thực hiện embedding, nhưng **`structured.json` (canonical schema)** luôn là "nguồn sự thật" (Source of Truth) để giữ metadata, toạ độ, số trang và citation chính xác.
-   - Dùng `ChunkingService` cắt đoạn và nhúng vector bằng Embedding LLM API.
-   - Lưu vào bảng chunk (PGVector).
-   - **Update trạng thái**: Tài liệu chuyển sang `READY_BASIC`. *(Lúc này Người dùng đã có thể chat và search nội dung tài liệu ngay lập tức với Vector RAG).*
+1. Download file từ MinIO vào temp. Hỗ trợ cả HTTP URL.
+2. **Parser Router** quyết định engine:
 
-2. **ENRICHMENT Worker** (chậm, option thêm):
-   - Hàm `enrichment.py` nhận gói thông tin cấu trúc (JSON + Tables + Image Data).
-   - Khởi động pipeline RAG-Anything Graph. Gọi LLM backend đã cấu hình (Provider Manager) để phân tích Entity, tạo Knowledge Graph Network.
-   - **Update trạng thái**: Tài liệu lên cấp cao nhất `READY_ENRICHED`. *(Người dùng lúc này có thêm tính năng Graph RAG nâng cao).*
+| Route | Điều kiện | Engine | Output |
+|-------|-----------|--------|--------|
+| **Route 0** | `.txt`, `.md`, `.csv`, `.json`, `.rtf`, `.odt`, `.html`, `.xhtml` | Direct text read | UTF-8/RTF/ODT extraction |
+| **Route 1** | `.jpg`, `.png`, `.webp`, `.tiff`, `.bmp` hoặc `config.parser=paddleocr` hoặc `USE_PADDLEOCR_FOR_PDF=true` | **PaddleOCREngine** (PPStructureV3) | Markdown + structured layout |
+| **Route 2** | Mặc định (`.pdf`, `.docx`, `.xlsx`, `.pptx`) | **DocumentEngine** (Docling) | Markdown + DoclingDocument JSON |
+
+Frontend preview note: `DocumentViewer` renders PDF/image/DOCX with native viewers. `PPTX` and `XLSX` do not use a binary Office renderer; the Original tab displays extracted markdown from backend content, and `XLSX` markdown tables are rendered as HTML tables.
+
+3. **Sub-OCR** cho embedded images (chỉ trong Route 2):
+   - **PDF**: Phát hiện vùng `type=image` → crop → PaddleOCR `process_crops()` → append text
+   - **DOCX**: Parse XML structure → extract media → PaddleOCR `ocr_image()` → insert `[Image Text: ...]` tại đúng vị trí paragraph
+   - Priority: PaddleOCR → Skip with warning (Surya is not active)
+
+4. **Normalize Module** (`normalize.py`): Ép tất cả output về canonical format `content_list` (text / image / table / equation) — tương thích RAG-Anything API.
+
+### Bước 9: Quality Gate (Stage 1.5)
+
+- `quality_check(min_chars=50)`: Kiểm tra text length
+- Bypass nếu có image/table/equation (multimodal docs)
+- Fail → Document `FAILED`, dừng pipeline
+
+### Bước 10-11: Fork (Stage 3)
+
+Thay vì OCR worker tự làm tiếp (gây nghẽn), ta fork:
+
+1. **INDEX Worker** (nhanh, bắt buộc):
+   - Load `content.md` từ MinIO
+   - **`ChunkingService.chunk_by_sentences()`**: LlamaIndex `SentenceSplitter` với:
+     - `chunk_size=512`, `chunk_overlap=50`
+     - `paragraph_separator="\n\n"`
+     - `secondary_chunking_regex="[.!?]\\s+"`
+   - **`EmbeddingService.embed_batch()`**: `paraphrase-multilingual-mpnet-base-v2` → dim=768 native (không pad zero)
+   - INSERT chunks + vectors → pgvector
+   - Document → `READY_BASIC` *(searchable ngay)* nếu `STRICT_NEO4J=false`
+   - Nếu `STRICT_NEO4J=true` (default hiện tại): Document giữ `INDEXING` progress 95 và chờ enrichment Neo4j hoàn tất
+
+2. **ENRICHMENT Worker** (chậm, optional):
+   - Load `structured.json` → reuse canonical `content_list`
+   - `RAGAnything.insert_content_list()` → Entity/Relation extraction → Knowledge Graph
+   - Document → `READY_ENRICHED` *(nếu thành công)*
+   - Nếu `STRICT_NEO4J=false`: Fail → document giữ `READY_BASIC`, vẫn searchable
+   - Nếu `STRICT_NEO4J=true`: Fail sau retry → document `FAILED` để báo rõ graph backend không đạt yêu cầu
 
 ---
 
-## 3. Hệ Sinh Thái Trạng Thái (Document Statuses)
+## 3. Hệ Sinh Thái Trạng Thái
 
-Các trạng thái được quản lý xuyên suốt `app/db/models.py`. Search Retriever Service hiện tại sẽ lọc theo các status `READY`.
+| Trạng thái | Diễn giải | Search |
+|------------|-----------|--------|
+| `NEW` | Mới tạo, chưa xử lý | ❌ |
+| `UPLOADING` | Đang presigned upload | ❌ |
+| `INDEXING` | Đang trong pipeline OCR/Index | ❌ |
+| `FAILED` | Lỗi parser, quality gate, hoặc crash | ❌ |
+| **`READY_BASIC`** | Vector index xong, chờ enrichment | ✅ Vector + BM25 |
+| **`READY_ENRICHED`** | Tất cả pipeline hoàn tất | ✅ Vector + BM25 + Graph |
+| `READY` | Legacy status (data cũ) | ✅ = READY_BASIC |
+| `ARCHIVED` | Ẩn, không xóa | ❌ |
+| `DELETED` | Xóa mềm | ❌ |
 
-| Tên trạng thái | Diễn giải | Mức khả dụng (Search) |
-| --- | --- | --- |
-| `NEW` | Mới khởi tạo, API vừa tiếp nhận. | ❌ Trống rỗng |
-| `INDEXING` | Nằm đang ở hàng đợi Celery, hoặc đang Parser cắt chữ. | ❌ Trống rỗng |
-| `FAILED` | Phân tích thất bại do lỗi file, lỗi mô hình, hoặc rỗng nội dung (Bị Quality Gate chặn). | ❌ Bị loại bỏ |
-| **`READY_BASIC`** | **(Trạng thái Mới)** Parser và Vector Index hoàn tất. Dữ liệu đã chia chunk ổn định. Hệ thống Graphic Enrichment chưa xong. | ✅ Query bằng BM25 và Vector. Response khá nhanh. |
-| **`READY_ENRICHED`** | **(Trạng thái Mới)** Mọi pipeline RAG Network chạy xong, Knowledge Graph map 100%. | ✅ Tối đa (BM25 + Vector + Graph RAG). |
-| `READY` | *(Trạng thái cũ)* Các tài liệu cũ trong CSDL chưa migration. | ✅ Tương đương `READY_BASIC`. |
-| `DELETED`/`ARCHIVED` | Xóa mềm hệ thống hoặc khóa tạm thời. | ❌ Bị chặn |
+---
 
-## 4. Tương tác Worker và Hệ thống (Docker Stack)
+## 4. Technology Stack (v3.2)
 
-Hệ thống có cấu hình qua Docker compose.
+| Component | Technology | Ghi chú |
+|-----------|-----------|---------|
+| **OCR (ảnh/scan)** | PaddleOCR PP-OCRv5 + PPStructureV3 | CPU-optimized, ~5-10s/page |
+| **Parser (digital)** | Docling | PDF/DOCX/XLSX structural extraction |
+| **Sub-OCR fallback** | None in active path | PaddleOCR unavailable means skip + warning; Surya is legacy-only |
+| **Chunking** | LlamaIndex SentenceSplitter | Sentence-aware, context-preserving |
+| **Embedding** | SentenceTransformer `mpnet-base-v2` | dim=768 native, local, zero-cost |
+| **Vector DB** | pgvector (Vector 768) | PostgreSQL extension |
+| **Graph RAG** | RAGAnything + Neo4j/LightRAG | Optional enrichment layer |
 
-*   `celery-worker-ocr` (concurrency: 2): Lắng nghe `ocr,convert` queue. Chuyên gọi model AI nặng. Nhanh hay chậm tùy VRAM.
-*   `celery-worker-index` (concurrency: 2): Lắng nghe `index,default` queue. Cắt chữ chia nhỏ và embedding API. Nhẹ, tốc độ nhanh.
-*   `celery-worker-enrichment` (concurrency: 1): Lắng nghe `enrichment` queue chạy RAG-Anything. Khống chế process=1 để không làm nghẽn cạn LLM Rate Limit bằng các API Calls.
+---
 
-Kiến trúc Async Fork này giúp UI mở khoá linh hoạt, thay vì loading circle báo "đang chờ" hàng giờ đồng hồ như ở version siêu cũ.
+## 5. Docker Workers
+
+| Worker | Queue | Concurrency | Vai trò |
+|--------|-------|-------------|---------|
+| `celery-worker-ocr` | `ocr,convert` | 2 | Parser/OCR (PaddleOCR, Docling) |
+| `celery-worker-index` | `index,default` | 2 | Chunking + Embedding (nhẹ, nhanh) |
+| `celery-worker-enrichment` | `enrichment` | 1 | RAGAnything Graph (chặn LLM rate limit) |
+
+---
+
+## 6. Tham khảo chi tiết
+
+- **UML Diagram**: [`docs/uml/upload_workflow_new.puml`](../uml/upload_workflow_new.puml)
+- **Deep Code Audit**: [`docs/explain/upload_pipeline_audit.md`](../explain/upload_pipeline_audit.md) — code-reality map
+- **Legacy UML**: [`docs/uml/upload_workflow_old.puml`](../uml/upload_workflow_old.puml) — Surya-based v2.0

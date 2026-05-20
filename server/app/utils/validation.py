@@ -15,7 +15,7 @@ ALLOWED_EXTENSIONS: Set[str] = {
     # Images
     "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "gif",
     # Text / Markup
-    "txt", "md", "csv", "html", "xhtml",
+    "txt", "md", "csv", "json", "rtf", "odt", "html", "xhtml",
 }
 
 # Blocked extensions (executables, scripts)
@@ -42,12 +42,15 @@ MIME_TYPES = {
     "txt": "text/plain",
     "md": "text/markdown",
     "csv": "text/csv",
+    "json": "application/json",
+    "rtf": "application/rtf",
+    "odt": "application/vnd.oasis.opendocument.text",
     "html": "text/html",
     "xhtml": "application/xhtml+xml",
 }
 
-# Default max file size (50MB)
-DEFAULT_MAX_SIZE = 50 * 1024 * 1024
+# Default max file size follows runtime settings
+DEFAULT_MAX_SIZE = settings.MAX_FILE_SIZE
 
 
 class FileValidationError(Exception):
@@ -95,7 +98,7 @@ def validate_file_size(size: int, max_size: int = None) -> Tuple[bool, str]:
     Returns:
         Tuple of (is_valid, error_message)
     """
-    max_size = max_size or DEFAULT_MAX_SIZE
+    max_size = max_size or settings.MAX_FILE_SIZE
     
     if size <= 0:
         return False, "File is empty"
@@ -155,7 +158,7 @@ def get_document_type(filename: str) -> str:
         return "pptx"
     elif ext in ["jpg", "jpeg", "png", "webp", "tif", "tiff", "bmp", "gif"]:
         return "image"
-    elif ext in ["txt", "md"]:
+    elif ext in ["txt", "md", "json", "rtf", "odt"]:
         return "txt"
     elif ext == "csv":
         return "csv"

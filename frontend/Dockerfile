@@ -1,36 +1,18 @@
-# Multi-stage build for OCR_Ink Frontend
-FROM node:20-alpine AS builder
+# Frontend - Vite Dev Server with Hot Reload
+FROM node:20-alpine
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json package-lock.json* ./
 
-# Install dependencies
-RUN npm ci
+# Fresh install
+RUN rm -rf node_modules package-lock.json && \
+    npm install --silent --no-audit --no-fund
 
 # Copy source code
 COPY . .
-# Configure Node memory limit to prevent Docker daemon from crashing
-ENV NODE_OPTIONS="--max-old-space-size=2048"
 
-# Build the application
-RUN npm run build
+EXPOSE 5173
 
-# Production stage
-FROM nginx:alpine
-
-# Copy built files from builder
-COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Expose port
-EXPOSE 80
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

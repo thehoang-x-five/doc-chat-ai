@@ -22,7 +22,7 @@ async def initialize_raganything(
     ai_manager: Any,
     embedding_service: Any,
 ) -> Any:
-    """Initialize RAGAnything instance."""
+    """Initialize RAGAnything instance with LightRAG + Neo4j graph storage."""
     try:
         from app.services.rag_patterns.pipeline import RAGPipeline as RAGAnything
         from app.services.rag_patterns.pipeline.config import RAGConfig
@@ -33,24 +33,75 @@ async def initialize_raganything(
         working_dir.mkdir(parents=True, exist_ok=True)
 
         # Create wrappers
-        # Note: We pass ai_manager.generate_completion/stream via partial or wrapper
-        # The wrapper factory handles the binding
-        
-        async def generate_func(**kwargs):
-            # Adapter to call AI Manager
-            # We assume AI Manager has generate_completion
-            return await ai_manager.generate_completion(
-                messages=kwargs.get("messages", []), # Messages built inside wrapper
-                model=kwargs.get("model"),
-                **kwargs
-            )
-            
-        # Bind the generate function to the manager instance method
         generate_bound = ai_manager.generate_completion
 
         llm_func = create_llm_wrapper(ai_manager, generate_bound)
         vision_func = create_vision_wrapper(generate_bound)
         embedding_func = create_embedding_wrapper(embedding_service)
+
+        # =====================================================================
+        # Initialize LightRAG with Neo4j graph storage
+        # =====================================================================
+        lightrag_instance = None
+        graph_backend = "disabled"
+        strict_neo4j = bool(getattr(settings, "STRICT_NEO4J", False))
+        try:
+            from lightrag import LightRAG
+
+            lightrag_kwargs = {
+                "working_dir": str(working_dir),
+                "llm_model_func": llm_func,
+                "embedding_func": embedding_func,
+            }
+
+            # Try to use Neo4j as graph storage backend
+            try:
+                from lightrag.kg.neo4j_impl import Neo4JStorage
+
+                neo4j_uri = settings.NEO4J_URI
+                neo4j_user = settings.NEO4J_USERNAME
+                neo4j_password = settings.NEO4J_PASSWORD
+
+                lightrag_kwargs["graph_storage"] = "Neo4JStorage"
+                lightrag_kwargs["addon_params"] = {
+                    "neo4j_uri": neo4j_uri,
+                    "neo4j_username": neo4j_user,
+                    "neo4j_password": neo4j_password,
+                }
+
+                graph_backend = "neo4j"
+                logger.info(
+                    f"LightRAG will use Neo4j graph storage at {neo4j_uri}"
+                )
+            except ImportError as exc:
+                if strict_neo4j:
+                    raise RuntimeError(
+                        "STRICT_NEO4J is enabled but lightrag.kg.neo4j_impl.Neo4JStorage is unavailable"
+                    ) from exc
+                graph_backend = "networkx"
+                logger.warning(
+                    "Neo4JStorage not available in lightrag, "
+                    "falling back to default NetworkX graph storage"
+                )
+
+            lightrag_instance = LightRAG(**lightrag_kwargs)
+            logger.info("LightRAG instance created successfully")
+
+        except ImportError as e:
+            if strict_neo4j:
+                raise RuntimeError(
+                    f"STRICT_NEO4J is enabled but LightRAG is unavailable: {e}"
+                ) from e
+            logger.warning(f"LightRAG not available: {e}. KG enrichment disabled.")
+        except Exception as e:
+            if strict_neo4j:
+                raise RuntimeError(
+                    f"STRICT_NEO4J is enabled but LightRAG/Neo4j initialization failed: {e}"
+                ) from e
+            logger.warning(
+                f"Failed to create LightRAG instance: {e}. "
+                f"KG enrichment will be disabled."
+            )
 
         # Config
         config = RAGConfig(
@@ -64,10 +115,17 @@ async def initialize_raganything(
 
         raganything = RAGAnything(
             config=config,
+            lightrag=lightrag_instance,
             llm_func=llm_func,
             vision_func=vision_func,
             embedding_func=embedding_func,
         )
+        raganything._graph_backend = graph_backend
+
+        if strict_neo4j and graph_backend != "neo4j":
+            raise RuntimeError(
+                f"STRICT_NEO4J is enabled but graph backend resolved to {graph_backend}"
+            )
         
         # Register default MetricsCallback for observability
         from app.services.rag_patterns.pipeline.callbacks import MetricsCallback
@@ -75,7 +133,8 @@ async def initialize_raganything(
         raganything.callback_manager.register(metrics_cb)
         raganything._metrics_callback = metrics_cb  # Keep reference for access
 
-        logger.info(f"RAGAnything initialized at {working_dir}")
+        kg_status = graph_backend if lightrag_instance else "disabled"
+        logger.info(f"RAGAnything initialized at {working_dir} (KG: {kg_status})")
         return raganything
 
     except ImportError as e:
@@ -156,6 +215,7 @@ async def initialize_patterns(
         )
 
         # REVEAL (Multimodal)
+        embedding_dim = 768 if embedding_service is None else embedding_service.dimension
         services["reveal"] = REVEALService(
             raganything_instance=raganything_instance,
             vision_model_func=wrappers.get("vision_func"),
@@ -166,7 +226,7 @@ async def initialize_patterns(
                 attention_enabled=getattr(settings, "REVEAL_ATTENTION_ENABLED", True),
                 top_k=getattr(settings, "REVEAL_TOP_K", 5),
             ),
-            embedding_dim=768, 
+            embedding_dim=embedding_dim,
         )
 
         # Semantic Highlight

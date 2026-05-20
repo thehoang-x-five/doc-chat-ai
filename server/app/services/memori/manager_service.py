@@ -94,6 +94,9 @@ class MemoriManager:
         entity = result.scalar_one_or_none()
         
         if entity:
+            if workspace_id and entity.workspace_id is None:
+                entity.workspace_id = workspace_id
+                await self.session.flush()
             return entity.id
         
         # Tạo mới
@@ -371,9 +374,10 @@ class MemoriManager:
         from app.db.models import MemoriEntity, MemoriKnowledgeGraph
         
         # Lấy internal ID
-        result = await self.session.execute(
-            select(MemoriEntity.id).where(MemoriEntity.external_id == entity_id)
-        )
+        query = select(MemoriEntity.id).where(MemoriEntity.external_id == entity_id)
+        if self.config.workspace_id:
+            query = query.where(MemoriEntity.workspace_id == self.config.workspace_id)
+        result = await self.session.execute(query)
         internal_id = result.scalar_one_or_none()
         if not internal_id:
             return []

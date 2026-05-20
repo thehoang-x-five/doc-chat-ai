@@ -12,11 +12,17 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models import DocumentCategory, Document, User
+from app.db.models import DocumentCategory, Document, User, DocumentStatus
 from app.api.deps import get_current_user
 from app.services.documents.category_service import CategoryService
 
 router = APIRouter(prefix="/categories", tags=["categories"])
+
+READY_DOCUMENT_STATUSES = (
+    DocumentStatus.READY,
+    DocumentStatus.READY_BASIC,
+    DocumentStatus.READY_ENRICHED,
+)
 
 
 # =============================================================================
@@ -89,7 +95,7 @@ async def list_categories(
     for cat in categories:
         count_query = select(func.count(Document.id)).where(
             Document.category_id == cat.id,
-            Document.status == "READY"
+            Document.status.in_(READY_DOCUMENT_STATUSES),
         )
         count_result = await db.execute(count_query)
         doc_count = count_result.scalar() or 0
@@ -190,7 +196,7 @@ async def update_category(
     # Get document count
     count_query = select(func.count(Document.id)).where(
         Document.category_id == category.id,
-        Document.status == "READY"
+        Document.status.in_(READY_DOCUMENT_STATUSES),
     )
     count_result = await db.execute(count_query)
     doc_count = count_result.scalar() or 0
@@ -263,7 +269,7 @@ async def categorize_document(
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Check if document is ready (has been indexed)
-    if document.status not in ("READY", "indexed"):
+    if document.status not in (*READY_DOCUMENT_STATUSES, "indexed"):
         # Document is still being processed, return pending status instead of error
         return {
             "success": False,

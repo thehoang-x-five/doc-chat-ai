@@ -1,7 +1,7 @@
 """
 Normalize module — Canonical schema converter + Quality gate.
 
-Converts Surya/Docling/plaintext parser output into a unified format
+Converts PaddleOCR/Docling/plaintext parser output into a unified format
 that can be used by both the Index worker and the Enrichment worker.
 
 The canonical content_list format matches RAG-Anything's insert_content_list() API:
@@ -12,6 +12,51 @@ import logging
 from typing import Tuple, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+def _split_markdown_sections(markdown_text: str) -> List[Dict[str, Any]]:
+    """
+    Split markdown into structure-aware text blocks using headings.
+
+    If no headings are found, return a single block.
+    """
+    text = (markdown_text or "").strip()
+    if not text:
+        return []
+
+    lines = text.splitlines()
+    sections: List[Dict[str, Any]] = []
+    current_title = None
+    current_lines: List[str] = []
+
+    def flush_section() -> None:
+        block_text = "\n".join(current_lines).strip()
+        if not block_text:
+            return
+        sections.append(
+            {
+                "type": "text",
+                "text": block_text,
+                "page_idx": 0,
+                "section_title": current_title,
+            }
+        )
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            flush_section()
+            current_lines = [line]
+            current_title = stripped.lstrip("#").strip() or None
+            continue
+        current_lines.append(line)
+
+    flush_section()
+
+    if sections:
+        return sections
+
+    return [{"type": "text", "text": text, "page_idx": 0}]
 
 
 def _detect_language(text: str) -> str:
@@ -38,7 +83,7 @@ def normalize_parser_output(
     Normalize all parser outputs into a canonical schema.
 
     Args:
-        parser_used: "surya", "docling", "docling+surya", "plaintext", "direct"
+        parser_used: "paddleocr", "docling", "docling+paddleocr", "plaintext", "direct"
         full_text: Raw extracted text
         markdown_text: Markdown-formatted text
         structured_json: Parser-specific structured output
@@ -51,13 +96,8 @@ def normalize_parser_output(
     # Build content_list (RAG-Anything compatible format)
     content_list: List[Dict[str, Any]] = []
 
-    # 1. Add main text block
-    if markdown_text and markdown_text.strip():
-        content_list.append({
-            "type": "text",
-            "text": markdown_text,
-            "page_idx": 0,
-        })
+    # 1. Add main text block(s), preserving markdown headings when possible
+    content_list.extend(_split_markdown_sections(markdown_text))
 
     # 2. Extract images from structured_json
     images = structured_json.get("images", [])
@@ -94,6 +134,19 @@ def normalize_parser_output(
             "page_idx": eq.get("page_idx", 0),
         })
 
+    # 5. Extract mixed-PDF page OCR blocks produced by PaddleOCR recovery
+    mixed_page_ocr = structured_json.get("mixed_page_ocr", [])
+    for page_ocr in mixed_page_ocr:
+        text = (page_ocr.get("text") or "").strip()
+        if not text:
+            continue
+        content_list.append({
+            "type": "text",
+            "text": text,
+            "page_idx": page_ocr.get("page_idx", 0),
+            "section_title": page_ocr.get("section_title"),
+        })
+
     # Compute stats
     char_count = len(full_text) if full_text else 0
     word_count = len(full_text.split()) if full_text else 0
@@ -114,6 +167,7 @@ def normalize_parser_output(
             "image_count": len(images),
             "table_count": len(tables),
             "equation_count": len(equations),
+            "mixed_page_ocr_count": len(mixed_page_ocr),
             "parser_used": parser_used,
         },
         "parser_used": parser_used,

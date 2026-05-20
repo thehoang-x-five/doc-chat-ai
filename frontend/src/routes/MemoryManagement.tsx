@@ -31,6 +31,15 @@ export default function MemoryManagement() {
   // Use user.id as entityId (same as Chat.tsx)
   const entityId = user?.id || '';
   const { stats, loading } = useMemori(workspaceId || undefined, entityId || undefined);
+  const factsTotal = stats?.totalFacts || 0;
+  const triplesTotal = stats?.totalTriples || 0;
+  const avgImportance = stats?.avgImportance || 0;
+  const importanceDistribution = [
+    { label: t.memory?.critical || 'Critical (8-10)', value: avgImportance >= 8 && factsTotal > 0 ? 100 : 0, color: 'bg-red-500' },
+    { label: t.memory?.high || 'High (5-7)', value: avgImportance >= 5 && avgImportance < 8 && factsTotal > 0 ? 100 : 0, color: 'bg-orange-500' },
+    { label: t.memory?.medium || 'Medium (3-4)', value: avgImportance >= 3 && avgImportance < 5 && factsTotal > 0 ? 100 : 0, color: 'bg-yellow-500' },
+    { label: t.memory?.low || 'Low (0-2)', value: avgImportance < 3 && factsTotal > 0 ? 100 : 0, color: 'bg-green-500' },
+  ];
 
 
   const tabs = [
@@ -96,13 +105,13 @@ export default function MemoryManagement() {
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-muted-foreground">{t.memory?.storageUsage || 'Storage Usage'}</span>
                       <span className="font-medium">
-                        {stats ? ((stats.totalFacts / 1000) * 100).toFixed(1) : '0.0'}%
+                        {((factsTotal / 1000) * 100).toFixed(1)}%
                       </span>
                     </div>
                     <div className="w-full bg-muted rounded-full h-1.5">
                       <div
                         className="bg-primary h-1.5 rounded-full transition-all"
-                        style={{ width: stats ? `${Math.min((stats.totalFacts / 1000) * 100, 100)}%` : '0%' }}
+                        style={{ width: `${Math.min((factsTotal / 1000) * 100, 100)}%` }}
                       ></div>
                     </div>
                   </div>
@@ -111,13 +120,13 @@ export default function MemoryManagement() {
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-muted-foreground">{t.memory?.qualityScore || 'Quality Score'}</span>
                       <span className="font-medium">
-                        {stats ? ((stats.avgImportance / 10) * 100).toFixed(0) : '0'}%
+                        {((avgImportance / 10) * 100).toFixed(0)}%
                       </span>
                     </div>
                     <div className="w-full bg-muted rounded-full h-1.5">
                       <div
                         className="bg-green-600 dark:bg-green-500 h-1.5 rounded-full transition-all"
-                        style={{ width: stats ? `${(stats.avgImportance / 10) * 100}%` : '0%' }}
+                        style={{ width: `${(avgImportance / 10) * 100}%` }}
                       ></div>
                     </div>
                   </div>
@@ -128,15 +137,15 @@ export default function MemoryManagement() {
                 <h3 className="text-sm font-semibold mb-2">{t.memory?.recentActivity || 'Recent Activity'}</h3>
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${stats && stats.totalFacts > 0 ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${factsTotal > 0 ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                     <span className="text-muted-foreground">{t.memory?.systemActive || 'System active and learning'}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${stats && stats.totalFacts > 0 ? 'bg-blue-500' : 'bg-gray-400'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${factsTotal > 0 ? 'bg-blue-500' : 'bg-gray-400'}`}></div>
                     <span className="text-muted-foreground">{t.memory?.autoRecallEnabled || 'Auto-recall enabled'}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${stats && stats.totalTriples > 0 ? 'bg-primary' : 'bg-gray-400'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${triplesTotal > 0 ? 'bg-primary' : 'bg-gray-400'}`}></div>
                     <span className="text-muted-foreground">{t.memory?.graphUpdated || 'Knowledge graph updated'}</span>
                   </div>
                 </div>
@@ -149,7 +158,7 @@ export default function MemoryManagement() {
               <div className="rounded-lg border border-border bg-background p-2.5 flex flex-col">
                 <h3 className="text-sm font-semibold mb-2">{t.memory?.factsGrowth || 'Facts Growth'}</h3>
                 <div className="flex-1 flex items-end justify-between gap-1">
-                  {[12, 18, 25, 32, 45, 58, stats?.totalFacts || 0].map((value, idx) => (
+                  {[0, 0, 0, 0, 0, 0, factsTotal].map((value, idx) => (
                     <div key={idx} className="flex-1 flex flex-col items-center gap-1">
                       <div className="w-full bg-primary/20 rounded-t relative" style={{ height: `${Math.max((value / 100) * 100, 5)}%` }}>
                         <div className="absolute inset-0 bg-gradient-to-t from-primary to-primary/50 rounded-t"></div>
@@ -184,12 +193,12 @@ export default function MemoryManagement() {
                         fill="none"
                         stroke="currentColor"
                         strokeWidth="12"
-                        strokeDasharray={`${((stats?.totalTriples || 0) / 100) * 251.2} 251.2`}
+                        strokeDasharray={`${(Math.min(triplesTotal, 100) / 100) * 251.2} 251.2`}
                         className="text-primary"
                       />
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <div className="text-xl font-bold text-primary">{stats?.totalTriples || 0}</div>
+                      <div className="text-xl font-bold text-primary">{triplesTotal}</div>
                       <div className="text-[10px] text-muted-foreground">{t.memory?.relations || 'Relations'}</div>
                     </div>
                   </div>
@@ -200,12 +209,7 @@ export default function MemoryManagement() {
               <div className="rounded-lg border border-border bg-background p-2.5 flex flex-col">
                 <h3 className="text-sm font-semibold mb-2">{t.memory?.importanceDistribution || 'Importance Distribution'}</h3>
                 <div className="flex-1 flex flex-col justify-center space-y-1.5">
-                  {[
-                    { label: t.memory?.critical || 'Critical (8-10)', value: 15, color: 'bg-red-500' },
-                    { label: t.memory?.high || 'High (5-7)', value: 35, color: 'bg-orange-500' },
-                    { label: t.memory?.medium || 'Medium (3-4)', value: 30, color: 'bg-yellow-500' },
-                    { label: t.memory?.low || 'Low (0-2)', value: 20, color: 'bg-green-500' },
-                  ].map((item, idx) => (
+                  {importanceDistribution.map((item, idx) => (
                     <div key={idx}>
                       <div className="flex justify-between text-xs mb-0.5">
                         <span className="text-muted-foreground">{item.label}</span>
@@ -227,7 +231,7 @@ export default function MemoryManagement() {
                 <h3 className="text-sm font-semibold mb-2">{t.memory?.memoryPerformance || 'Memory Performance'}</h3>
                 <div className="flex-1 flex flex-col">
                   <div className="flex-1 flex items-end justify-between gap-1">
-                    {[65, 72, 68, 78, 85, 82, 88, 90, 87, 92, 95, 93].map((value, idx) => (
+                    {[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Math.min(100, Math.round((avgImportance / 10) * 100))].map((value, idx) => (
                       <div key={idx} className="flex-1 flex flex-col items-center gap-1">
                         <div className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t" style={{ height: `${value}%` }}></div>
                         {idx % 3 === 0 && (

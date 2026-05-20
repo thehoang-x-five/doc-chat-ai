@@ -32,12 +32,18 @@ RUN cp /etc/resolv.conf /etc/resolv.conf.bak; \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copy base requirements (HEAVY - cached, rarely changes)
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install base dependencies (cached layer ~500MB)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
+
+# Copy extra requirements (LIGHT - add new packages here)
+COPY requirements-extra.txt .
+
+# Install extra dependencies (small layer, fast rebuild ~30s)
+RUN pip install --no-cache-dir -r requirements-extra.txt
 
 # Copy application code
 COPY . .

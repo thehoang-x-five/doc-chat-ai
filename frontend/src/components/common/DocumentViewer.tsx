@@ -1,10 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
-
-// Configure PDF.js worker
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+import { useState, useEffect, useRef } from 'react';
 
 /* ─────────────────────────────────────────────────────────────
  * SUPPORTED EXTENSIONS — single source of truth (frontend)
@@ -14,7 +8,7 @@ export const SUPPORTED_EXTENSIONS = [
   'pdf',
   'docx', 'pptx', 'xlsx',
   'jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'webp', 'gif',
-  'txt', 'md', 'csv', 'html', 'xhtml',
+  'txt', 'md', 'csv', 'json', 'rtf', 'odt', 'html', 'xhtml',
 ] as const;
 
 /** Build the `accept` attribute string for <input type="file"> */
@@ -40,6 +34,8 @@ interface DocumentViewerProps {
   downloadUrl: string;
   /** Attachment download URL (for Save-As) */
   attachmentUrl: string;
+  /** Async function that returns the original document blob with auth refresh support */
+  fetchOriginalBlob?: (signal?: AbortSignal) => Promise<{ blob: Blob; filename: string; mimeType: string }>;
   /** Async function that returns the OCR/markdown text */
   fetchOcrText: () => Promise<string>;
   /** Called when close button is clicked */
@@ -57,6 +53,7 @@ export default function DocumentViewer({
   mimeType,
   downloadUrl,
   attachmentUrl,
+  fetchOriginalBlob,
   fetchOcrText,
   onClose,
   t,
@@ -66,11 +63,108 @@ export default function DocumentViewer({
   const [ocrLoading, setOcrLoading] = useState(false);
   const [rawText, setRawText] = useState<string | null>(null);
   const [rawLoading, setRawLoading] = useState(false);
+  const [originalObjectUrl, setOriginalObjectUrl] = useState<string | null>(null);
+  const [originalLoading, setOriginalLoading] = useState(false);
+  const [originalError, setOriginalError] = useState<string | null>(null);
   const docxContainerRef = useRef<HTMLDivElement>(null);
+  const fetchOriginalBlobRef = useRef(fetchOriginalBlob);
+  const fetchOcrTextRef = useRef(fetchOcrText);
   const ext = extOf(documentName);
 
   /* ── Determine renderer type for original file ── */
   const rendererType = getRendererType(ext, mimeType);
+  const sourceUrl = originalObjectUrl || downloadUrl;
+  const sourceReady = rendererType === 'placeholder' || rendererType === 'extracted' || !fetchOriginalBlob || !!originalObjectUrl;
+
+  useEffect(() => {
+    fetchOriginalBlobRef.current = fetchOriginalBlob;
+  }, [fetchOriginalBlob]);
+
+  useEffect(() => {
+    fetchOcrTextRef.current = fetchOcrText;
+  }, [fetchOcrText]);
+
+  useEffect(() => {
+    setOcrText(null);
+    setRawText(null);
+    setRawLoading(false);
+    setOriginalError(null);
+    setOriginalLoading(false);
+    setOriginalObjectUrl(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, [documentId]);
+
+  useEffect(() => {
+    return () => {
+      if (originalObjectUrl) URL.revokeObjectURL(originalObjectUrl);
+    };
+  }, [originalObjectUrl]);
+
+  /* Load original file through authenticated fetch to avoid stale token URLs */
+  useEffect(() => {
+    if (
+      activeTab !== 'original' ||
+      rendererType === 'placeholder' ||
+      rendererType === 'extracted' ||
+      originalObjectUrl ||
+      originalLoading
+    ) return;
+    const loader = fetchOriginalBlobRef.current;
+    if (!loader) return;
+
+    const controller = new AbortController();
+    setOriginalLoading(true);
+    setOriginalError(null);
+    if (rendererType === 'text') setRawLoading(true);
+
+    loader(controller.signal)
+      .then(async ({ blob }) => {
+        if (controller.signal.aborted) return;
+        setOriginalObjectUrl(URL.createObjectURL(blob));
+        if (rendererType === 'text') {
+          setRawText(await blob.text());
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        console.error('Original document load failed:', err);
+        setOriginalError('Failed to load file.');
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setOriginalLoading(false);
+        if (rendererType === 'text') setRawLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activeTab, rendererType, originalObjectUrl, documentId]);
+
+  useEffect(() => {
+    if (activeTab !== 'original' || rendererType !== 'extracted' || rawText !== null || rawLoading) return;
+
+    let cancelled = false;
+    setRawLoading(true);
+    fetchOcrTextRef.current()
+      .then(text => {
+        if (cancelled) return;
+        const content = text || '(No extracted content available)';
+        setRawText(content);
+        setOcrText(prev => prev ?? content);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRawText('(Failed to load extracted content)');
+      })
+      .finally(() => {
+        if (!cancelled) setRawLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, rendererType, rawText, documentId]);
 
   /* ── Lazy-load OCR text when switching to Tab 2 ── */
   useEffect(() => {
@@ -85,7 +179,7 @@ export default function DocumentViewer({
 
   /* ── Lazy-load raw text for TXT/MD/CSV viewers ── */
   useEffect(() => {
-    if (rendererType === 'text' && rawText === null && !rawLoading) {
+    if (!fetchOriginalBlob && rendererType === 'text' && rawText === null && !rawLoading) {
       setRawLoading(true);
       fetch(downloadUrl)
         .then(r => r.text())
@@ -93,14 +187,14 @@ export default function DocumentViewer({
         .catch(() => setRawText('(Failed to load file)'))
         .finally(() => setRawLoading(false));
     }
-  }, [rendererType, rawText, rawLoading, downloadUrl]);
+  }, [rendererType, rawText, rawLoading, downloadUrl, fetchOriginalBlob]);
 
   /* ── Lazy-load DOCX rendering ── */
   useEffect(() => {
-    if (rendererType === 'docx' && activeTab === 'original' && docxContainerRef.current) {
-      renderDocx(downloadUrl, docxContainerRef.current);
+    if (rendererType === 'docx' && activeTab === 'original' && sourceReady && docxContainerRef.current) {
+      renderDocx(sourceUrl, docxContainerRef.current);
     }
-  }, [rendererType, activeTab, downloadUrl]);
+  }, [rendererType, activeTab, sourceUrl, sourceReady]);
 
   /* ── Keyboard: Escape to close ── */
   useEffect(() => {
@@ -187,12 +281,15 @@ export default function DocumentViewer({
           {activeTab === 'original' ? (
             <OriginalViewer
               rendererType={rendererType}
-              downloadUrl={downloadUrl}
+              downloadUrl={sourceUrl}
               attachmentUrl={attachmentUrl}
               documentName={documentName}
               mimeType={mimeType}
               rawText={rawText}
-              rawLoading={rawLoading}
+              rawLoading={rawLoading || (rendererType === 'text' && originalLoading)}
+              sourceReady={sourceReady}
+              originalLoading={originalLoading}
+              originalError={originalError}
               docxContainerRef={docxContainerRef}
               t={t}
             />
@@ -213,16 +310,21 @@ export default function DocumentViewer({
  * Sub-components
  * ═══════════════════════════════════════════════════════════════ */
 
-type RendererType = 'pdf' | 'image' | 'docx' | 'text' | 'html' | 'placeholder';
+type RendererType = 'pdf' | 'image' | 'docx' | 'text' | 'html' | 'extracted' | 'placeholder';
 
 function getRendererType(ext: string, mimeType: string): RendererType {
+  const normalizedMime = (mimeType || '').toLowerCase();
   if (ext === 'pdf' || mimeType === 'application/pdf') return 'pdf';
-  if (['jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'webp', 'gif'].includes(ext) || mimeType.startsWith('image/'))
+  if (['jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'webp', 'gif'].includes(ext) || normalizedMime.startsWith('image/'))
     return 'image';
-  if (ext === 'docx') return 'docx';
-  if (['txt', 'md', 'csv'].includes(ext)) return 'text';
+  if (ext === 'docx' || normalizedMime.includes('wordprocessingml.document')) return 'docx';
+  if (
+    ['pptx', 'xlsx'].includes(ext) ||
+    normalizedMime.includes('spreadsheetml.sheet') ||
+    normalizedMime.includes('presentationml.presentation')
+  ) return 'extracted';
+  if (['txt', 'md', 'csv', 'json', 'rtf', 'odt'].includes(ext)) return 'text';
   if (['html', 'xhtml'].includes(ext)) return 'html';
-  // pptx, xlsx → no good JS renderer
   return 'placeholder';
 }
 
@@ -234,6 +336,10 @@ function fileIcon(ext: string) {
     return <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
   if (ext === 'docx')
     return <svg className="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>;
+  if (ext === 'xlsx')
+    return <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18M8 4v16m8-16v16M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" /></svg>;
+  if (ext === 'pptx')
+    return <svg className="w-4 h-4 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2zm3 5h4.5a2.5 2.5 0 010 5H10V9z" /></svg>;
   return <svg className="w-4 h-4 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>;
 }
 
@@ -246,6 +352,9 @@ function OriginalViewer({
   mimeType,
   rawText,
   rawLoading,
+  sourceReady,
+  originalLoading,
+  originalError,
   docxContainerRef,
   t,
 }: {
@@ -256,9 +365,24 @@ function OriginalViewer({
   mimeType: string;
   rawText: string | null;
   rawLoading: boolean;
+  sourceReady: boolean;
+  originalLoading: boolean;
+  originalError: string | null;
   docxContainerRef: React.RefObject<HTMLDivElement | null>;
   t?: Record<string, any>;
 }) {
+  if (!sourceReady && originalError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-destructive p-8">
+        <p>{originalError}</p>
+      </div>
+    );
+  }
+
+  if (!sourceReady || originalLoading) {
+    return <LoadingSpinner label={t?.kb?.loadingContent || 'Loading...'} />;
+  }
+
   switch (rendererType) {
     case 'pdf':
       return <PdfViewer url={downloadUrl} documentName={documentName} />;
@@ -309,6 +433,10 @@ function OriginalViewer({
         />
       );
 
+    case 'extracted':
+      if (rawLoading) return <LoadingSpinner label={t?.kb?.loadingContent || 'Loading...'} />;
+      return <ExtractedContentViewer rawText={rawText || ''} documentName={documentName} />;
+
     case 'placeholder':
       return (
         <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-8">
@@ -341,6 +469,151 @@ function OriginalViewer({
 }
 
 /** CSV table renderer — parses raw CSV text and renders as styled table */
+type MarkdownBlock =
+  | { type: 'text'; lines: string[] }
+  | { type: 'table'; rows: string[][] };
+
+function ExtractedContentViewer({ rawText }: { rawText: string; documentName: string }) {
+  const blocks = parseMarkdownBlocks(rawText);
+
+  if (!rawText.trim()) {
+    return (
+      <div className="flex items-center justify-center h-full p-8 text-sm text-muted-foreground">
+        No extracted content available.
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-auto bg-background">
+      <div className="p-5 space-y-5">
+        {blocks.map((block, index) => {
+          if (block.type === 'table') {
+            return <MarkdownTable key={`table-${index}`} rows={block.rows} />;
+          }
+
+          return (
+            <pre
+              key={`text-${index}`}
+              className="whitespace-pre-wrap text-sm font-mono leading-relaxed text-foreground"
+            >
+              {block.lines.join('\n')}
+            </pre>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MarkdownTable({ rows }: { rows: string[][] }) {
+  if (rows.length === 0) return null;
+
+  const header = rows[0];
+  const body = rows.slice(1);
+  const columnCount = Math.max(...rows.map(row => row.length));
+
+  return (
+    <div className="overflow-hidden border border-border rounded-lg">
+      <table className="w-full table-fixed text-xs border-collapse">
+        <thead className="sticky top-0 z-10">
+          <tr>
+            {Array.from({ length: columnCount }).map((_, index) => (
+              <th
+                key={index}
+                className="px-2 py-2 text-left text-[11px] font-semibold bg-primary/10 text-primary border-b border-border whitespace-normal break-words align-top"
+              >
+                {header[index] || ''}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((row, rowIndex) => (
+            <tr
+              key={rowIndex}
+              className={`border-b border-border/50 hover:bg-muted/40 ${rowIndex % 2 === 1 ? 'bg-muted/20' : ''}`}
+            >
+              {Array.from({ length: columnCount }).map((_, cellIndex) => (
+                <td key={cellIndex} className="px-2 py-2 align-top text-foreground whitespace-pre-wrap break-words">
+                  {row[cellIndex] || ''}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function parseMarkdownBlocks(text: string): MarkdownBlock[] {
+  const lines = text.split(/\r?\n/);
+  const blocks: MarkdownBlock[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    if (isMarkdownTableStart(lines, index)) {
+      const tableLines: string[] = [];
+      while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+        tableLines.push(lines[index]);
+        index++;
+      }
+
+      const rows = tableLines
+        .filter(line => !isMarkdownSeparatorRow(line))
+        .map(splitMarkdownRow)
+        .filter(row => row.length > 1);
+
+      if (rows.length > 0) {
+        blocks.push({ type: 'table', rows });
+      }
+      continue;
+    }
+
+    const textLines: string[] = [];
+    while (index < lines.length && !isMarkdownTableStart(lines, index)) {
+      textLines.push(lines[index]);
+      index++;
+    }
+
+    const trimmed = trimBlankEdges(textLines);
+    if (trimmed.length > 0) {
+      blocks.push({ type: 'text', lines: trimmed });
+    }
+  }
+
+  return blocks;
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  return Boolean(
+    lines[index]?.includes('|') &&
+    lines[index + 1]?.includes('|') &&
+    isMarkdownSeparatorRow(lines[index + 1])
+  );
+}
+
+function isMarkdownSeparatorRow(line: string): boolean {
+  const cells = splitMarkdownRow(line);
+  return cells.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s/g, '')));
+}
+
+function splitMarkdownRow(line: string): string[] {
+  let value = line.trim();
+  if (value.startsWith('|')) value = value.slice(1);
+  if (value.endsWith('|')) value = value.slice(0, -1);
+  return value.split('|').map(cell => cell.trim());
+}
+
+function trimBlankEdges(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && !lines[start].trim()) start++;
+  while (end > start && !lines[end - 1].trim()) end--;
+  return lines.slice(start, end);
+}
+
 function CsvTableViewer({ rawText }: { rawText: string }) {
   const rows = parseCsv(rawText);
   if (rows.length === 0) return <pre className="p-5 text-sm text-muted-foreground">(Empty CSV)</pre>;
@@ -422,7 +695,7 @@ function OcrTextViewer({
   if (loading) return <LoadingSpinner label={t?.kb?.loadingOcr || 'Loading OCR text...'} />;
   return (
     <div className="h-full overflow-auto p-5">
-      <pre className="whitespace-pre-wrap text-sm font-mono leading-relaxed text-foreground">
+      <pre className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm font-mono leading-relaxed text-foreground">
         {text || (t?.kb?.noContent || 'No content available.')}
       </pre>
     </div>
@@ -442,35 +715,16 @@ function LoadingSpinner({ label }: { label: string }) {
   );
 }
 
-/** Native react-pdf viewer component */
+/** Native browser PDF viewer component */
 function PdfViewer({ url, documentName }: { url: string; documentName: string }) {
-  const [numPages, setNumPages] = useState<number>();
-  
   return (
-    <div className="flex flex-col items-center overflow-auto h-full bg-muted/20 p-4">
-      <Document
-        file={url}
-        onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-        loading={<LoadingSpinner label="Loading PDF engine (react-pdf)..." />}
-        error={
-          <div className="flex flex-col items-center justify-center h-full text-destructive p-8">
-            <p>Failed to load PDF.</p>
-          </div>
-        }
-        className="flex flex-col gap-6"
-      >
-        {Array.from(new Array(numPages), (el, index) => (
-          <div key={`page_container_${index + 1}`} className="bg-white shadow-xl rounded-sm overflow-hidden border border-border/50">
-            <Page
-              pageNumber={index + 1}
-              renderTextLayer={true}
-              renderAnnotationLayer={true}
-              loading={<div className="p-12 text-muted-foreground text-sm">Loading page {index + 1}...</div>}
-              className="max-w-full"
-            />
-          </div>
-        ))}
-      </Document>
+    <div className="h-full bg-muted/20">
+      <iframe
+        key={url}
+        src={`${url}#toolbar=1&navpanes=0`}
+        title={documentName}
+        className="w-full h-full border-0 bg-white"
+      />
     </div>
   );
 }

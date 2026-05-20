@@ -20,7 +20,7 @@ export function FactManagementPanel({
 }: FactManagementPanelProps) {
   const { t } = useI18n();
   const { pushToast } = useOutletContext<AppOutletContext>();
-  const { facts, stats, loading, error, listFacts, recallFacts, addFacts, updateFactImportance, pinFact } = useMemori(workspaceId, entityId);
+  const { facts, stats, loading, error, listFacts, recallFacts, addFacts, updateFactImportance, pinFact, deleteFact } = useMemori(workspaceId, entityId);
   const [searchQuery, setSearchQuery] = useState('');
   const [newFactContent, setNewFactContent] = useState('');
   const [newFactImportance, setNewFactImportance] = useState(1.0);
@@ -42,11 +42,11 @@ export function FactManagementPanel({
     if (searchQuery.trim()) {
       setIsSearchMode(true);
       try {
-        await recallFacts(searchQuery, 50);
+        const results = await recallFacts(searchQuery, 50);
         pushToast({
           type: 'success',
           title: t.memory?.searchSuccess || "Search completed",
-          message: `${t.memory?.found || 'Found'} ${facts.length} ${t.memory?.facts || 'facts'}`,
+          message: `${t.memory?.found || 'Found'} ${results.length} ${t.memory?.facts || 'facts'}`,
         });
       } catch (err) {
         pushToast({
@@ -125,18 +125,25 @@ export function FactManagementPanel({
 
   const handleDeleteFact = async (factId: number) => {
     try {
-      // Call API to delete fact (you need to implement this in useMemori)
-      // For now, just show toast
-      pushToast({
-        type: 'info',
-        title: 'Delete',
-        message: 'Delete functionality coming soon',
-      });
+      const success = await deleteFact(factId);
+      if (success) {
+        pushToast({
+          type: 'success',
+          title: t.memory?.factDeleted || 'Fact deleted',
+          message: t.memory?.factDeletedDescription || 'The fact was removed from memory',
+        });
+      } else {
+        pushToast({
+          type: 'error',
+          title: t.memory?.deleteFactError || 'Failed to delete fact',
+          message: error || t.memory?.deleteFactError || 'Failed to delete fact',
+        });
+      }
     } catch (err) {
       pushToast({
         type: 'error',
-        title: 'Error',
-        message: 'Failed to delete fact',
+        title: t.memory?.deleteFactError || 'Failed to delete fact',
+        message: err instanceof Error ? err.message : String(err),
       });
     }
   };

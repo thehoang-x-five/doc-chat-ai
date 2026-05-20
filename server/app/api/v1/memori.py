@@ -122,6 +122,7 @@ async def recall_facts(
                     similarity=f.similarity,
                     lexical_score=f.lexical_score,
                     rank_score=f.rank_score,
+                    importance_score=getattr(f, "importance_score", 1.0),
                 )
                 for f in facts
             ],
@@ -156,7 +157,10 @@ async def list_facts(
     try:
         # Get entity internal ID
         result = await db.execute(
-            select(MemoriEntity.id).where(MemoriEntity.external_id == entity_id)
+            select(MemoriEntity.id).where(
+                MemoriEntity.external_id == entity_id,
+                MemoriEntity.workspace_id == workspace_id,
+            )
         )
         internal_id = result.scalar_one_or_none()
         
@@ -343,7 +347,10 @@ async def get_memory_stats(
     try:
         # Get entity
         result = await db.execute(
-            select(MemoriEntity.id).where(MemoriEntity.external_id == entity_id)
+            select(MemoriEntity.id).where(
+                MemoriEntity.external_id == entity_id,
+                MemoriEntity.workspace_id == workspace_id,
+            )
         )
         internal_id = result.scalar_one_or_none()
         
@@ -385,6 +392,46 @@ async def get_memory_stats(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get memory stats: {str(e)}"
         )
+
+
+@router.delete(
+    "/facts/{fact_id}",
+    summary="Delete fact",
+    description="Delete a single fact from memory"
+)
+async def delete_fact(
+    fact_id: int,
+    workspace_id: UUID = Query(..., description="Workspace ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single fact, scoped by workspace."""
+    try:
+        from app.db.models import MemoriEntity, MemoriEntityFact
+        from sqlalchemy import select
+
+        result = await db.execute(
+            select(MemoriEntityFact)
+            .join(MemoriEntity, MemoriEntityFact.entity_id == MemoriEntity.id)
+            .where(
+                MemoriEntityFact.id == fact_id,
+                MemoriEntity.workspace_id == workspace_id,
+            )
+        )
+        fact = result.scalar_one_or_none()
+
+        if not fact:
+            raise HTTPException(status_code=404, detail=f"Fact {fact_id} not found")
+
+        await db.delete(fact)
+        await db.commit()
+
+        return {"success": True, "fact_id": fact_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete fact: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete(
@@ -887,22 +934,23 @@ async def update_fact_importance(
 ):
     """Update the importance score of a fact."""
     try:
-        from app.db.models import MemoriEntityFact
-        from sqlalchemy import update
-        
-        # Update the fact
-        stmt = (
-            update(MemoriEntityFact)
-            .where(MemoriEntityFact.id == fact_id)
-            .values(importance_score=importance_score)
-            .returning(MemoriEntityFact)
+        from app.db.models import MemoriEntity, MemoriEntityFact
+        from sqlalchemy import select
+
+        result = await db.execute(
+            select(MemoriEntityFact)
+            .join(MemoriEntity, MemoriEntityFact.entity_id == MemoriEntity.id)
+            .where(
+                MemoriEntityFact.id == fact_id,
+                MemoriEntity.workspace_id == workspace_id,
+            )
         )
-        
-        result = await db.execute(stmt)
         updated_fact = result.scalar_one_or_none()
         
         if not updated_fact:
             raise HTTPException(status_code=404, detail=f"Fact {fact_id} not found")
+
+        updated_fact.importance_score = importance_score
         
         await db.commit()
         
@@ -934,24 +982,26 @@ async def pin_fact(
 ):
     """Pin or unpin a fact by setting importance score."""
     try:
-        from app.db.models import MemoriEntityFact
-        from sqlalchemy import update
+        from app.db.models import MemoriEntity, MemoriEntityFact
+        from sqlalchemy import select
         
         # Set importance: 10 if pinned, 1 if unpinned
         new_importance = 10.0 if pinned else 1.0
-        
-        stmt = (
-            update(MemoriEntityFact)
-            .where(MemoriEntityFact.id == fact_id)
-            .values(importance_score=new_importance)
-            .returning(MemoriEntityFact)
+
+        result = await db.execute(
+            select(MemoriEntityFact)
+            .join(MemoriEntity, MemoriEntityFact.entity_id == MemoriEntity.id)
+            .where(
+                MemoriEntityFact.id == fact_id,
+                MemoriEntity.workspace_id == workspace_id,
+            )
         )
-        
-        result = await db.execute(stmt)
         updated_fact = result.scalar_one_or_none()
         
         if not updated_fact:
             raise HTTPException(status_code=404, detail=f"Fact {fact_id} not found")
+
+        updated_fact.importance_score = new_importance
         
         await db.commit()
         

@@ -61,8 +61,8 @@ class DocumentEngine:
                 self.converter = DocumentConverter(
                     allowed_formats=[
                         InputFormat.PDF, InputFormat.IMAGE, InputFormat.DOCX, 
-                        InputFormat.HTML, InputFormat.PPTX, InputFormat.ASCIIDOC,
-                        InputFormat.MD
+                        InputFormat.HTML, InputFormat.PPTX, InputFormat.XLSX,
+                        InputFormat.ASCIIDOC, InputFormat.MD
                     ],
                     format_options={
                         InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
@@ -107,7 +107,7 @@ class DocumentEngine:
             
             # Check file type
             file_ext = file_path.suffix.lower()
-            text_extensions = ['.txt', '.md', '.csv', '.json', '.xml', '.html']
+            text_extensions = ['.txt', '.md', '.csv', '.json', '.rtf', '.odt', '.xml', '.html', '.xhtml']
             
             # Try to use Docling if available for non-text files
             if file_ext in text_extensions:
@@ -665,6 +665,63 @@ class DocumentEngine:
         
         return lines
 
+    @staticmethod
+    def _decode_text_bytes(file_content: bytes) -> str:
+        try:
+            return file_content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return file_content.decode("latin-1", errors="ignore")
+
+    @classmethod
+    def _extract_rtf_text(cls, file_content: bytes) -> str:
+        import re
+
+        text = cls._decode_text_bytes(file_content)
+        text = re.sub(r"\\par[d]?", "\n", text)
+        text = re.sub(r"\\tab", "\t", text)
+        text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
+        text = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", text)
+        text = re.sub(r"[{}]", "", text)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    @staticmethod
+    def _extract_odt_text(file_content: bytes) -> str:
+        import io
+        import zipfile
+        import xml.etree.ElementTree as ET
+
+        with zipfile.ZipFile(io.BytesIO(file_content)) as archive:
+            xml_data = archive.read("content.xml")
+
+        root = ET.fromstring(xml_data)
+        paragraphs = []
+        for elem in root.iter():
+            if elem.tag.endswith("}p") or elem.tag.endswith("}h"):
+                text = "".join(elem.itertext()).strip()
+                if text:
+                    paragraphs.append(text)
+        return "\n\n".join(paragraphs).strip()
+
+    @classmethod
+    def _extract_text_like_file(cls, file_path: Path) -> str:
+        file_content = file_path.read_bytes()
+        file_ext = file_path.suffix.lower()
+
+        if file_ext == ".rtf":
+            return cls._extract_rtf_text(file_content)
+        if file_ext == ".odt":
+            return cls._extract_odt_text(file_content)
+
+        text = cls._decode_text_bytes(file_content)
+        if file_ext == ".json":
+            try:
+                import json
+
+                return json.dumps(json.loads(text), ensure_ascii=False, indent=2)
+            except Exception:
+                return text
+        return text
+
     async def _process_text_file(
         self,
         job_id: str,
@@ -681,18 +738,9 @@ class DocumentEngine:
         full_text = ""
         file_ext = file_path.suffix.lower()
         
-        if file_ext in ['.txt', '.md', '.csv', '.json', '.xml', '.html']:
+        if file_ext in ['.txt', '.md', '.csv', '.json', '.rtf', '.odt', '.xml', '.html', '.xhtml']:
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    full_text = f.read()
-            except UnicodeDecodeError:
-                # Try with different encoding
-                try:
-                    with open(file_path, 'r', encoding='latin-1') as f:
-                        full_text = f.read()
-                except Exception as e:
-                    logger.error(f"Could not read text file: {e}")
-                    raise ValueError(f"Could not read file: {file_path.name}")
+                full_text = self._extract_text_like_file(file_path)
             except Exception as e:
                 logger.error(f"Could not read text file: {e}")
                 raise ValueError(f"Could not read file: {file_path.name}")

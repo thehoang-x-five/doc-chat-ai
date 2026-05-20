@@ -5,7 +5,8 @@ Token-based windowing với khả năng cấu hình chunk size và overlap.
 Supports:
 1. Token-based windowing: Simple fixed-size chunks with overlap
 2. Paragraph-based chunking: Chunks by paragraph boundaries
-3. Semantic chunking (NEW): Embedding-based boundary detection for improved quality
+3. Semantic chunking: Embedding-based boundary detection for improved quality
+4. Sentence-aware chunking (DEFAULT): LlamaIndex SentenceSplitter for best RAG quality
 
 """
 import hashlib
@@ -28,6 +29,7 @@ class ChunkingStrategy(Enum):
     PARAGRAPH = "paragraph"  # Split by paragraph boundaries
     SEMANTIC = "semantic"  # Embedding-based semantic boundary detection
     HYBRID = "hybrid"  # Combination of paragraph + semantic
+    SENTENCE = "sentence"  # LlamaIndex SentenceSplitter (sentence-aware, best for RAG)
 
 
 @dataclass
@@ -38,6 +40,7 @@ class ChunkMetadata:
     page_end: Optional[int] = None
     section_title: Optional[str] = None
     bbox_json: Optional[Dict[str, Any]] = None
+    chunk_type: str = "text"
 
 
 @dataclass
@@ -120,6 +123,138 @@ class ChunkingService:
             return first_line
         
         return None
+
+    def _normalize_chunk(
+        self,
+        content: str,
+        chunk_index: int,
+        *,
+        chunk_type: str = "text",
+        page_start: Optional[int] = None,
+        page_end: Optional[int] = None,
+        section_title: Optional[str] = None,
+        bbox_json: Optional[Dict[str, Any]] = None,
+    ) -> TextChunk:
+        """Create a normalized chunk with consistent metadata."""
+        cleaned = self._clean_text(content)
+        return TextChunk(
+            content=cleaned,
+            token_count=self._estimate_tokens(cleaned),
+            hash=self._compute_hash(cleaned),
+            metadata=ChunkMetadata(
+                chunk_index=chunk_index,
+                page_start=page_start,
+                page_end=page_end,
+                section_title=section_title or self._extract_section_title(cleaned),
+                bbox_json=bbox_json,
+                chunk_type=chunk_type,
+            ),
+        )
+
+    def chunk_content_list(
+        self,
+        content_list: Optional[List[Dict[str, Any]]],
+        fallback_text: str = "",
+    ) -> List[TextChunk]:
+        """
+        Chunk canonical normalized content in a structure-aware way.
+
+        Text blocks use sentence-aware chunking while tables/equations become
+        standalone typed chunks to preserve retrieval context.
+        """
+        if not content_list:
+            return self.chunk_by_sentences(fallback_text)
+
+        chunks: List[TextChunk] = []
+        next_index = 0
+
+        for block in content_list:
+            if not isinstance(block, dict):
+                continue
+
+            block_type = str(block.get("type") or "text")
+            page_idx = block.get("page_idx")
+            page_number = page_idx + 1 if isinstance(page_idx, int) else None
+            bbox_json = block.get("bbox")
+
+            if block_type == "text":
+                block_text = (block.get("text") or "").strip()
+                if not block_text:
+                    continue
+                section_title = block.get("section_title")
+                sub_chunks = self.chunk_by_sentences(block_text)
+                for sub_chunk in sub_chunks:
+                    chunks.append(
+                        self._normalize_chunk(
+                            sub_chunk.content,
+                            next_index,
+                            chunk_type="text",
+                            page_start=page_number or sub_chunk.metadata.page_start,
+                            page_end=page_number or sub_chunk.metadata.page_end,
+                            section_title=section_title or sub_chunk.metadata.section_title,
+                            bbox_json=bbox_json or sub_chunk.metadata.bbox_json,
+                        )
+                    )
+                    next_index += 1
+                continue
+
+            if block_type == "table" and settings.CHUNK_INCLUDE_TABLES:
+                table_text = "\n".join(
+                    part.strip()
+                    for part in (
+                        block.get("table_caption", ""),
+                        block.get("table_body", ""),
+                        block.get("table_footnote", ""),
+                    )
+                    if str(part).strip()
+                )
+                if table_text:
+                    chunks.append(
+                        self._normalize_chunk(
+                            table_text,
+                            next_index,
+                            chunk_type="table",
+                            page_start=page_number,
+                            page_end=page_number,
+                            section_title=block.get("table_caption"),
+                            bbox_json=bbox_json,
+                        )
+                    )
+                    next_index += 1
+                continue
+
+            if block_type == "equation" and settings.CHUNK_INCLUDE_EQUATIONS:
+                equation_text = "\n".join(
+                    part.strip()
+                    for part in (
+                        block.get("text_format", ""),
+                        block.get("text", ""),
+                    )
+                    if str(part).strip()
+                )
+                if equation_text:
+                    chunks.append(
+                        self._normalize_chunk(
+                            equation_text,
+                            next_index,
+                            chunk_type="equation",
+                            page_start=page_number,
+                            page_end=page_number,
+                            section_title="Equation",
+                            bbox_json=bbox_json,
+                        )
+                    )
+                    next_index += 1
+
+        if chunks:
+            logger.info(
+                "Structure-aware chunking produced %s chunks from %s blocks",
+                len(chunks),
+                len(content_list),
+            )
+            return chunks
+
+        return self.chunk_by_sentences(fallback_text)
     
     def chunk_text(
         self,
@@ -551,22 +686,112 @@ class ChunkingService:
         
         return chunks
     
+    def chunk_by_sentences(
+        self,
+        text: str,
+        page_info: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[TextChunk]:
+        """
+        Chunk text using LlamaIndex SentenceSplitter.
+        
+        This provides sentence-aware boundary detection which is superior
+        to fixed-size token windowing for RAG quality. Falls back to
+        paragraph-based chunking if LlamaIndex is not available.
+        
+        Args:
+            text: Full text to chunk
+            page_info: Optional page information
+            
+        Returns:
+            List of TextChunk objects
+        """
+        if not text or not text.strip():
+            return []
+        
+        text = self._clean_text(text)
+        
+        try:
+            from llama_index.core import Document as LlamaDocument
+            from llama_index.core.node_parser import SentenceSplitter
+        except ImportError:
+            logger.warning(
+                "llama-index-core not installed. "
+                "Falling back to paragraph-based chunking. "
+                "Install with: pip install llama-index-core>=0.10.0"
+            )
+            return self.chunk_by_paragraphs(text, page_info)
+        
+        try:
+            llama_doc = LlamaDocument(
+                text=text,
+                metadata={"source": "upload"},
+            )
+            
+            splitter = SentenceSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                paragraph_separator="\n\n",
+                secondary_chunking_regex="[.!?]\\s+",
+            )
+            
+            nodes = splitter.get_nodes_from_documents([llama_doc])
+            
+            chunks = []
+            for idx, node in enumerate(nodes):
+                content = node.get_content()
+                if not content.strip():
+                    continue
+                
+                token_count = self._estimate_tokens(content)
+                
+                # Determine page range
+                page_start, page_end = (
+                    self._find_page_range(content, page_info)
+                    if page_info else (None, None)
+                )
+                
+                chunks.append(TextChunk(
+                    content=content,
+                    token_count=token_count,
+                    hash=self._compute_hash(content),
+                    metadata=ChunkMetadata(
+                        chunk_index=idx,
+                        page_start=page_start,
+                        page_end=page_end,
+                        section_title=self._extract_section_title(content),
+                    ),
+                ))
+            
+            logger.info(
+                f"LlamaIndex SentenceSplitter produced {len(chunks)} chunks "
+                f"(size={self.chunk_size}, overlap={self.chunk_overlap})"
+            )
+            return chunks
+            
+        except Exception as e:
+            logger.error(
+                f"LlamaIndex SentenceSplitter failed: {e}. "
+                f"Falling back to paragraph-based chunking."
+            )
+            return self.chunk_by_paragraphs(text, page_info)
+
     def chunk_adaptive(
         self,
         text: str,
-        strategy: ChunkingStrategy = ChunkingStrategy.HYBRID,
+        strategy: ChunkingStrategy = ChunkingStrategy.SENTENCE,
         embed_fn: Optional[Callable[[List[str]], List[List[float]]]] = None,
         page_info: Optional[List[Dict[str, Any]]] = None,
     ) -> List[TextChunk]:
         """
         Chunk text using adaptive strategy selection.
         
+        Default strategy is SENTENCE (LlamaIndex SentenceSplitter).
         Automatically selects the best chunking method based on
         text characteristics and available resources.
         
         Args:
             text: Text to chunk
-            strategy: Chunking strategy to use
+            strategy: Chunking strategy to use (default: SENTENCE)
             embed_fn: Optional embedding function for semantic chunking
             page_info: Optional page information
             
@@ -582,16 +807,19 @@ class ChunkingService:
         elif strategy == ChunkingStrategy.SEMANTIC:
             return self.chunk_semantic(text, embed_fn, page_info=page_info)
         
+        elif strategy == ChunkingStrategy.SENTENCE:
+            return self.chunk_by_sentences(text, page_info)
+        
         elif strategy == ChunkingStrategy.HYBRID:
-            # Try semantic first, fall back to paragraph
+            # Try semantic first, fall back to sentence-based
             if embed_fn:
                 return self.chunk_semantic(text, embed_fn, page_info=page_info)
             else:
-                return self.chunk_by_paragraphs(text, page_info)
+                return self.chunk_by_sentences(text, page_info)
         
         else:
-            logger.warning(f"Unknown strategy {strategy}, using token window")
-            return self.chunk_text(text, page_info)
+            logger.warning(f"Unknown strategy {strategy}, using sentence-based")
+            return self.chunk_by_sentences(text, page_info)
 
 
 # Default instance

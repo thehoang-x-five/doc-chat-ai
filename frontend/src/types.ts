@@ -207,18 +207,33 @@ export interface HighlightMatch {
   end: number;
 }
 
-export const ALLOWED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'pdf', 'docx', 'txt', 'md'];
+export const ALLOWED_EXTENSIONS = [
+  'pdf',
+  'docx', 'pptx', 'xlsx',
+  'jpg', 'jpeg', 'png', 'bmp', 'tif', 'tiff', 'webp', 'gif',
+  'txt', 'md', 'csv', 'json', 'rtf', 'odt', 'html', 'xhtml',
+];
 
 export const ALLOWED_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'image/png',
   'image/jpeg',
   'image/webp',
   'image/tiff',
   'image/bmp',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/gif',
   'text/plain',
   'text/markdown',
+  'text/csv',
+  'application/json',
+  'text/rtf',
+  'application/rtf',
+  'application/vnd.oasis.opendocument.text',
+  'text/html',
+  'application/xhtml+xml',
 ];
 
-export const MAX_FILE_SIZE = 15 * 1024 * 1024;
+export const MAX_FILE_SIZE = 50 * 1024 * 1024;

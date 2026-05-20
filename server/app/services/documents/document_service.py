@@ -19,6 +19,7 @@ from app.db.models import (
     DocumentStatus, JobType, JobStatus
 )
 from app.storage.object_store import ObjectStore
+from app.core.config import settings
 from app.utils.validation import (
     validate_file, detect_mime_type, get_document_type
 )
@@ -85,7 +86,11 @@ class DocumentService:
         file.file.seek(0)
         
         # Validate tệp
-        is_valid, error = validate_file(file.filename, file_size)
+        is_valid, error = validate_file(
+            file.filename,
+            file_size,
+            max_size=settings.MAX_FILE_SIZE,
+        )
         if not is_valid:
             raise InvalidFileError(error)
         
@@ -174,6 +179,9 @@ class DocumentService:
         
         # Cập nhật trạng thái tài liệu
         document.status = DocumentStatus.INDEXING
+        
+        # Commit TRƯỚC khi enqueue — đảm bảo Celery worker đọc được data
+        await self.session.commit()
         await self.session.refresh(document)
         
         # *** Dispatch Celery OCR task ***
@@ -194,7 +202,11 @@ class DocumentService:
         if not await self.workspace_service.check_permission(workspace_id, user_id, "write"):
             raise PermissionDeniedError("Không có quyền upload")
             
-        is_valid, error = validate_file(filename, size)
+        is_valid, error = validate_file(
+            filename,
+            size,
+            max_size=settings.MAX_FILE_SIZE,
+        )
         if not is_valid:
             raise InvalidFileError(error)
             

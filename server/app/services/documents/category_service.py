@@ -14,9 +14,15 @@ from dataclasses import dataclass
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Document, DocumentCategory, Chunk
+from app.db.models import Document, DocumentCategory, Chunk, DocumentStatus
 
 logger = logging.getLogger(__name__)
+
+READY_DOCUMENT_STATUSES = (
+    DocumentStatus.READY,
+    DocumentStatus.READY_BASIC,
+    DocumentStatus.READY_ENRICHED,
+)
 
 
 @dataclass
@@ -215,7 +221,7 @@ Trả lời bằng tiếng Việt, ngắn gọn và rõ ràng."""
             # Lấy tài liệu trong category
             docs_query = select(Document).where(
                 Document.category_id == category_id,
-                Document.status == "READY"
+                Document.status.in_(READY_DOCUMENT_STATUSES),
             ).limit(10)
             docs_result = await self.session.execute(docs_query)
             documents = docs_result.scalars().all()
@@ -235,6 +241,13 @@ Trả lời bằng tiếng Việt, ngắn gọn và rõ ràng."""
                 category_description=category.description or "",
                 documents_info=docs_info,
             )
+            if not summary:
+                doc_titles = ", ".join(d.title for d in documents[:5])
+                summary = (
+                    f'Category "{category.name}" hiện có {len(documents)} tài liệu đã xử lý'
+                    f"{': ' + doc_titles if doc_titles else ''}. "
+                    "Chưa tạo được tóm tắt AI chi tiết do provider tạm thời không khả dụng."
+                )
             
             if summary:
                 category.content_summary = summary
@@ -283,7 +296,7 @@ Trả lời bằng tiếng Việt, ngắn gọn và rõ ràng."""
                 try:
                     count_query = select(func.count(Document.id)).where(
                         Document.category_id == cat.id,
-                        Document.status == "READY"
+                        Document.status.in_(READY_DOCUMENT_STATUSES),
                     )
                     count_result = await self.session.execute(count_query)
                     doc_count = count_result.scalar() or 0
@@ -317,7 +330,7 @@ Trả lời bằng tiếng Việt, ngắn gọn và rõ ràng."""
             # Đếm tài liệu
             count_query = select(func.count(Document.id)).where(
                 Document.category_id == cat.id,
-                Document.status == "READY"
+                Document.status.in_(READY_DOCUMENT_STATUSES),
             )
             count_result = await self.session.execute(count_query)
             doc_count = count_result.scalar() or 0

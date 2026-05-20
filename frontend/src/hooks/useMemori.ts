@@ -12,6 +12,24 @@ export function useMemori(workspaceId?: string, entityId?: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Load memory statistics
+  const loadStats = useCallback(async () => {
+    if (!workspaceId || !entityId) {
+      return;
+    }
+
+    try {
+      const memoryStats = await apiClient.getMemoryStats({
+        entityId,
+        workspaceId,
+      });
+
+      setStats(memoryStats);
+    } catch (err) {
+      console.error('Failed to load memory stats:', err);
+    }
+  }, [workspaceId, entityId]);
+
   // List all facts (no search)
   const listFacts = useCallback(async (limit: number = 100, offset: number = 0) => {
     if (!workspaceId || !entityId) {
@@ -98,7 +116,7 @@ export function useMemori(workspaceId?: string, entityId?: string) {
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, entityId]);
+  }, [workspaceId, entityId, loadStats]);
 
   // Load knowledge graph
   const loadKnowledgeGraph = useCallback(async (limit: number = 100) => {
@@ -123,24 +141,6 @@ export function useMemori(workspaceId?: string, entityId?: string) {
       setError(message);
     } finally {
       setLoading(false);
-    }
-  }, [workspaceId, entityId]);
-
-  // Load memory statistics
-  const loadStats = useCallback(async () => {
-    if (!workspaceId || !entityId) {
-      return;
-    }
-
-    try {
-      const memoryStats = await apiClient.getMemoryStats({
-        entityId,
-        workspaceId,
-      });
-
-      setStats(memoryStats);
-    } catch (err) {
-      console.error('Failed to load memory stats:', err);
     }
   }, [workspaceId, entityId]);
 
@@ -171,6 +171,30 @@ export function useMemori(workspaceId?: string, entityId?: string) {
       setLoading(false);
     }
   }, [workspaceId]);
+
+  // Delete fact
+  const deleteFact = useCallback(async (factId: number) => {
+    if (!workspaceId) {
+      setError('Workspace ID is required');
+      return false;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      await apiClient.deleteFact(factId, workspaceId);
+      setFacts(prev => prev.filter(f => f.id !== factId));
+      await loadStats();
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete fact';
+      setError(message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [workspaceId, loadStats]);
 
   // Pin/unpin fact (NEW - Memory Intelligence)
   const pinFact = useCallback(async (factId: number, pinned: boolean) => {
@@ -219,6 +243,7 @@ export function useMemori(workspaceId?: string, entityId?: string) {
     addFacts,
     updateFactImportance,  // NEW
     pinFact,               // NEW
+    deleteFact,
     loadKnowledgeGraph,
     loadStats,
   };

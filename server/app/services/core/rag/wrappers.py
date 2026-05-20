@@ -157,11 +157,15 @@ def create_embedding_wrapper(embedding_service: Any):
     from lightrag.utils import EmbeddingFunc
 
     @async_retry(max_attempts=3, base_delay=0.5, max_delay=15.0)
-    async def embed_texts(texts: list[str]) -> list[list[float]]:
+    async def embed_texts(texts: list[str]):
+        import numpy as np
+
         if embedding_service is None:
             # Dummy embedding for testing
-            return [[0.0] * 768 for _ in texts]
-        return [embedding_service.embed_text(t) for t in texts]
+            return np.asarray([[0.0] * 768 for _ in texts], dtype=np.float32)
+        # embed_text() returns (vector, model_info) — unpack only vector
+        embeddings, _ = embedding_service.embed_batch(texts)
+        return np.asarray(embeddings, dtype=np.float32)
 
     embedding_dim = 768 if embedding_service is None else embedding_service.dimension
 
